@@ -22,7 +22,7 @@ enum Commands {
         /// Default: false
         quantize: bool,
     },
-    /// Run library benchmarks (uses the `vectro_lib` bench harness).
+    /// Run library benchmarks (uses the `vectro_plus` bench harness).
     /// Streams benchmark output and shows a spinner while running.
     Bench {},
     Search {
@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
             let _ = crate::compress_stream(&input, &output, quantize)?;
         }
         Commands::Bench {} => {
-            // Run cargo bench for vectro_lib and stream output. Show a spinner while running.
+            // Run cargo bench for vectro_plus and stream output. Show a spinner while running.
             use indicatif::{ProgressBar, ProgressStyle};
             use std::process::{Command, Stdio};
 
@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
             pb.set_message("running benches...");
 
             let mut cmd = Command::new("cargo");
-            cmd.arg("bench").arg("-p").arg("vectro_lib").stdout(Stdio::piped()).stderr(Stdio::piped());
+            cmd.arg("bench").arg("-p").arg("vectro_plus").stdout(Stdio::piped()).stderr(Stdio::piped());
 
             let mut child = cmd.spawn().expect("failed to spawn cargo bench");
             if let Some(mut out) = child.stdout.take() {
@@ -80,39 +80,39 @@ fn main() -> anyhow::Result<()> {
 
             // Load dataset if provided. If not provided and ./dataset.bin exists, use it.
             let embeddings = if let Some(path) = dataset {
-                match vectro_lib::EmbeddingDataset::load(&path) {
+                match vectro_plus::EmbeddingDataset::load(&path) {
                     Ok(ds) => ds.embeddings,
                     Err(e) => {
                         eprintln!("failed to load dataset {}: {}", path, e);
                         vec![
-                            vectro_lib::Embedding::new("one", vec![1.0, 0.0]),
-                            vectro_lib::Embedding::new("two", vec![0.0, 1.0]),
-                            vectro_lib::Embedding::new("three", vec![0.707, 0.707]),
+                            vectro_plus::Embedding::new("one", vec![1.0, 0.0]),
+                            vectro_plus::Embedding::new("two", vec![0.0, 1.0]),
+                            vectro_plus::Embedding::new("three", vec![0.707, 0.707]),
                         ]
                     }
                 }
             } else if Path::new("./dataset.bin").exists() {
-                match vectro_lib::EmbeddingDataset::load("./dataset.bin") {
+                match vectro_plus::EmbeddingDataset::load("./dataset.bin") {
                     Ok(ds) => ds.embeddings,
                     Err(e) => {
                         eprintln!("failed to load ./dataset.bin: {}", e);
                         vec![
-                            vectro_lib::Embedding::new("one", vec![1.0, 0.0]),
-                            vectro_lib::Embedding::new("two", vec![0.0, 1.0]),
-                            vectro_lib::Embedding::new("three", vec![0.707, 0.707]),
+                            vectro_plus::Embedding::new("one", vec![1.0, 0.0]),
+                            vectro_plus::Embedding::new("two", vec![0.0, 1.0]),
+                            vectro_plus::Embedding::new("three", vec![0.707, 0.707]),
                         ]
                     }
                 }
             } else {
                 vec![
-                    vectro_lib::Embedding::new("one", vec![1.0, 0.0]),
-                    vectro_lib::Embedding::new("two", vec![0.0, 1.0]),
-                    vectro_lib::Embedding::new("three", vec![0.707, 0.707]),
+                    vectro_plus::Embedding::new("one", vec![1.0, 0.0]),
+                    vectro_plus::Embedding::new("two", vec![0.0, 1.0]),
+                    vectro_plus::Embedding::new("three", vec![0.707, 0.707]),
                 ]
             };
 
             // Build SearchIndex for faster repeated queries
-            let idx = vectro_lib::search::SearchIndex::from_dataset(&embeddings);
+            let idx = vectro_plus::search::SearchIndex::from_dataset(&embeddings);
             let results = idx.top_k(&vec, top_k);
             for (i, (id, score)) in results.into_iter().enumerate() {
                 println!("{}. {} -> {:.6}", i + 1, id, score);

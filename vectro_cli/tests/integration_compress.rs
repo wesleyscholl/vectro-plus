@@ -16,6 +16,6 @@ fn compress_and_load_roundtrip() {
     assert_eq!(n, 2);
 
     // load using library
-    let ds = vectro_lib::EmbeddingDataset::load(outp.to_str().unwrap()).expect("load dataset");
+    let ds = vectro_plus::EmbeddingDataset::load(outp.to_str().unwrap()).expect("load dataset");
     assert_eq!(ds.len(), 2);
 }

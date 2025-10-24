@@ -943,11 +943,11 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "vectro_lib",
+ "vectro_plus",
 ]
 
 [[package]]
-name = "vectro_lib"
+name = "vectro_plus"
 version = "0.1.0"
 dependencies = [
  "anyhow",

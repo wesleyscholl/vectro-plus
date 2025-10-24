@@ -17,7 +17,7 @@ fn compress_quantized_and_load_roundtrip() {
     assert_eq!(n, 2);
 
     // load using library (should read QSTREAM and dequantize)
-    let ds = vectro_lib::EmbeddingDataset::load(outp.to_str().unwrap()).expect("load dataset");
+    let ds = vectro_plus::EmbeddingDataset::load(outp.to_str().unwrap()).expect("load dataset");
     assert_eq!(ds.len(), 2);
     // basic checks on ids
     assert!(ds.embeddings.iter().any(|e| e.id == "one"));

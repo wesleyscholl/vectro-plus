@@ -13,7 +13,7 @@ pub fn compress_stream(input: &str, output: &str, quantize: bool) -> anyhow::Res
     let writer_buf = std::io::BufWriter::new(outfile);
 
     // channels
-    let (item_tx, item_rx): (Sender<vectro_lib::Embedding>, Receiver<vectro_lib::Embedding>) = bounded(1024);
+    let (item_tx, item_rx): (Sender<vectro_plus::Embedding>, Receiver<vectro_plus::Embedding>) = bounded(1024);
     let (bytes_tx, bytes_rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = bounded(1024);
 
     // writer thread (non-quantized path will spawn writer now; quantized path spawns writer after tables computed)
@@ -71,7 +71,7 @@ pub fn compress_stream(input: &str, output: &str, quantize: bool) -> anyhow::Res
     // reader: parse lines and collect embeddings
     let mut parsed = 0usize;
     // collect embeddings when quantizing
-    let mut collected_embeddings: Vec<vectro_lib::Embedding> = if quantize { Vec::new() } else { Vec::new() };
+    let mut collected_embeddings: Vec<vectro_plus::Embedding> = if quantize { Vec::new() } else { Vec::new() };
     for line in reader.lines().flatten() {
         let line = line.trim();
         if line.is_empty() { continue; }
@@ -83,7 +83,7 @@ pub fn compress_stream(input: &str, output: &str, quantize: bool) -> anyhow::Res
                 if let (Some(id_str), Some(arr)) = (id.as_str(), vec.as_array()) {
                     let mut v = Vec::with_capacity(arr.len());
                     for x in arr { if let Some(flt) = x.as_f64() { v.push(flt as f32); } }
-                    let emb = vectro_lib::Embedding::new(id_str, v.clone());
+                    let emb = vectro_plus::Embedding::new(id_str, v.clone());
                     if quantize { collected_embeddings.push(emb.clone()); } else { let _ = item_tx.send(emb); }
                     parsed += 1;
                     pushed = true;
@@ -97,7 +97,7 @@ pub fn compress_stream(input: &str, output: &str, quantize: bool) -> anyhow::Res
                 let id = parts[0].to_string();
                 let mut v = Vec::new();
                 for p in &parts[1..] { if let Ok(f) = p.trim().parse::<f32>() { v.push(f); } }
-                let emb = vectro_lib::Embedding::new(id, v.clone());
+                let emb = vectro_plus::Embedding::new(id, v.clone());
                 if quantize { collected_embeddings.push(emb.clone()); } else { let _ = item_tx.send(emb); }
                 parsed += 1;
             }
@@ -107,9 +107,9 @@ pub fn compress_stream(input: &str, output: &str, quantize: bool) -> anyhow::Res
     }
 
     if quantize {
-        // compute tables using vectro_lib::search::quant::quantize_dataset
+        // compute tables using vectro_plus::search::quant::quantize_dataset
         let vectors: Vec<Vec<f32>> = collected_embeddings.iter().map(|e| e.vector.clone()).collect();
-        let (tables, _qvecs) = vectro_lib::search::quant::quantize_dataset(&vectors);
+        let (tables, _qvecs) = vectro_plus::search::quant::quantize_dataset(&vectors);
         // serialize tables to bincode
         let tables_blob = bincode::serialize(&tables)?;
 
@@ -151,7 +151,7 @@ pub fn compress_stream(input: &str, output: &str, quantize: bool) -> anyhow::Res
         // spawn workers to quantize embeddings
         let workers = num_cpus::get().max(1);
         use crossbeam_channel::bounded;
-        let (item_tx2, item_rx2) = bounded::<vectro_lib::Embedding>(1024);
+        let (item_tx2, item_rx2) = bounded::<vectro_plus::Embedding>(1024);
         // worker threads
         for _ in 0..workers {
             let r = item_rx2.clone();
@@ -228,7 +228,7 @@ mod tests {
     let n = compress_stream(&in_path, &out_path, false).expect("compress");
         assert_eq!(n, 2);
 
-        let ds = vectro_lib::EmbeddingDataset::load(&out_path).expect("load");
+        let ds = vectro_plus::EmbeddingDataset::load(&out_path).expect("load");
         assert_eq!(ds.len(), 2);
     }
 }

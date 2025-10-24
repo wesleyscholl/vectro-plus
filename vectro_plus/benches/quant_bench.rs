@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use vectro_lib::{Embedding, search::{SearchIndex, QuantizedIndex}};
+use vectro_plus::{Embedding, search::{SearchIndex, QuantizedIndex}};
 
 // synthetic dataset generator
 fn make_dataset(n: usize, dim: usize) -> Vec<Embedding> {
