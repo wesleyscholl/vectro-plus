@@ -211,6 +211,111 @@ pub fn compress_stream(input: &str, output: &str, quantize: bool) -> anyhow::Res
     Ok(parsed)
 }
 
+/// Compress embeddings to the `VECTRO+PQSTREAM1` binary format using Product Quantization.
+///
+/// # Arguments
+/// * `input`  — path to JSONL or CSV file (`{"id":..,"vector":[..]}` per line or `id,f,f,..`).
+/// * `output` — path for the `.pqstream1` output file.
+/// * `m`      — number of PQ subspaces (encoded bytes per vector); must divide vector dimension.
+/// * `k`      — centroids per subspace; must be ≤ 256 (default: 256).
+///
+/// Returns the number of embeddings written.
+pub fn compress_pq(input: &str, output: &str, m: usize, k: usize) -> anyhow::Result<usize> {
+    use std::io::BufRead;
+
+    let pqheader = b"VECTRO+PQSTREAM1\n";
+
+    let infile = std::fs::File::open(input)?;
+    let reader = std::io::BufReader::new(infile);
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(ProgressStyle::with_template("{spinner} {msg}").unwrap());
+    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+    pb.set_message("reading input for PQ training...");
+
+    // Collect all embeddings (PQ requires a full pass for training before encoding).
+    let mut embeddings: Vec<vectro_lib::Embedding> = Vec::new();
+    for line in reader.lines().map_while(Result::ok) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Try JSON first; fall back to CSV.
+        let mut added = false;
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+            if let (Some(id), Some(vec)) = (val.get("id"), val.get("vector")) {
+                if let (Some(id_str), Some(arr)) = (id.as_str(), vec.as_array()) {
+                    let v: Vec<f32> = arr
+                        .iter()
+                        .filter_map(|x| x.as_f64().map(|f| f as f32))
+                        .collect();
+                    embeddings.push(vectro_lib::Embedding::new(id_str, v));
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 2 {
+                let id = parts[0].to_string();
+                let v: Vec<f32> = parts[1..]
+                    .iter()
+                    .filter_map(|p| p.trim().parse().ok())
+                    .collect();
+                if !v.is_empty() {
+                    embeddings.push(vectro_lib::Embedding::new(id, v));
+                }
+            }
+        }
+
+        if embeddings.len() % 500 == 0 && !embeddings.is_empty() {
+            pb.set_message(format!("read {} embeddings...", embeddings.len()));
+        }
+    }
+
+    let count = embeddings.len();
+    if count == 0 {
+        pb.finish_with_message("no embeddings found — nothing written");
+        return Ok(0);
+    }
+
+    pb.set_message(format!(
+        "training PQ on {} vectors (m={}, k={})…",
+        count, m, k
+    ));
+    let pq = vectro_lib::ProductQuantizer::train(&embeddings, m, k, 25);
+
+    pb.set_message("encoding and writing…");
+    let pq_blob = bincode::serialize(&pq)?;
+
+    let f = std::fs::File::create(output)?;
+    let mut w = std::io::BufWriter::new(f);
+
+    // Write header.
+    w.write_all(pqheader)?;
+    // Write ProductQuantizer blob with a 4-byte LE length prefix.
+    let pq_len = (pq_blob.len() as u32).to_le_bytes();
+    w.write_all(&pq_len)?;
+    w.write_all(&pq_blob)?;
+
+    // Write each record: 4-byte LE length prefix + bincode((id, code)).
+    for emb in &embeddings {
+        let code = pq.encode(&emb.vector);
+        let rec = (emb.id.clone(), code);
+        let bytes = bincode::serialize(&rec)?;
+        let len = (bytes.len() as u32).to_le_bytes();
+        w.write_all(&len)?;
+        w.write_all(&bytes)?;
+    }
+    w.flush()?;
+
+    pb.finish_with_message(format!(
+        "wrote {} PQ-encoded entries to {} (m={}, k={})",
+        count, output, m, k
+    ));
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +393,40 @@ mod tests {
 
         let n = compress_stream(&in_path, &out_path, false).expect("compress");
         assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn compress_pq_roundtrip() {
+        // Verify compress_pq writes a valid PQSTREAM1 file that EmbeddingDataset::load can read.
+        let tmp_in = NamedTempFile::new().unwrap();
+        let in_path = tmp_in.path().to_str().unwrap().to_string();
+        // 32-dim vectors, m=4 divides 32 cleanly.
+        let mut lines = String::new();
+        for i in 0..100 {
+            let v: Vec<String> = (0..32)
+                .map(|d| format!("{:.3}", ((i * 17 + d * 11) % 97) as f32 / 97.0))
+                .collect();
+            lines.push_str(&format!("{{\"id\":\"id_{}\",\"vector\":[{}]}}\n", i, v.join(",")));
+        }
+        std::fs::write(&in_path, &lines).unwrap();
+
+        let tmp_out = NamedTempFile::new().unwrap();
+        let out_path = tmp_out.path().to_str().unwrap().to_string();
+
+        let n = compress_pq(&in_path, &out_path, 4, 16).expect("compress_pq");
+        assert_eq!(n, 100, "should write 100 entries");
+
+        // Round-trip: load reconstructs approximate f32 vectors.
+        let ds = vectro_lib::EmbeddingDataset::load(&out_path).expect("load PQSTREAM1");
+        assert_eq!(ds.len(), 100);
+        // Check IDs are preserved.
+        let ids: std::collections::HashSet<String> =
+            ds.embeddings.iter().map(|e| e.id.clone()).collect();
+        assert!(ids.contains("id_0"));
+        assert!(ids.contains("id_99"));
+        // Reconstructed vectors should have correct dimension.
+        for e in &ds.embeddings {
+            assert_eq!(e.vector.len(), 32, "reconstructed dim must be 32");
+        }
     }
 }

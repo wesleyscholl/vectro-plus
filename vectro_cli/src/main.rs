@@ -17,9 +17,11 @@
 //! ```
 
 use clap::{Parser, Subcommand};
-use vectro_cli::compress_stream;
+use vectro_cli::{compress_stream, compress_pq};
 
 use serde_json::Value;
+
+type BenchRow = (String, Option<f64>, Option<f64>, Option<String>);
 
 pub mod server;
 
@@ -36,12 +38,20 @@ enum Commands {
     Compress {
         input: String,
         output: String,
+        /// Compression format: `stream` (raw f32), `scalar` (u8 per-dim), or `pq` (Product Quantization).
+        /// Overrides `--quantize` when specified.
+        #[arg(long, default_value = "stream")]
+        format: String,
         #[arg(long, default_value_t = false)]
-        /// Produce a quantized streaming dataset (per-dimension min/max -> u8).
-        /// This reduces size and speeds up search at the cost of some accuracy.
-        /// Use for large datasets where memory/storage is constrained.
-        /// Default: false
+        /// Shorthand for `--format scalar` (kept for backward compatibility).
         quantize: bool,
+        /// Number of PQ subspaces (bytes per encoded vector). Used with `--format pq`.
+        /// Must divide the vector dimension. Lower → higher compression, lower recall.
+        #[arg(long, default_value_t = 8usize)]
+        pq_subspaces: usize,
+        /// Centroids per PQ subspace. Must be ≤ 256. Used with `--format pq`.
+        #[arg(long, default_value_t = 256usize)]
+        pq_centroids: usize,
     },
     /// Run library benchmarks (uses the `vectro_lib` bench harness).
     /// Streams benchmark output and shows a spinner while running.
@@ -77,8 +87,21 @@ enum Commands {
 }
 
 // Wrapper functions for testability
-fn execute_compress_command(input: &str, output: &str, quantize: bool) -> anyhow::Result<usize> {
-    crate::compress_stream(input, output, quantize)
+fn execute_compress_command(
+    input: &str,
+    output: &str,
+    format: &str,
+    quantize: bool,
+    pq_subspaces: usize,
+    pq_centroids: usize,
+) -> anyhow::Result<usize> {
+    if format == "pq" {
+        compress_pq(input, output, pq_subspaces, pq_centroids)
+    } else if format == "scalar" || quantize {
+        compress_stream(input, output, true)
+    } else {
+        compress_stream(input, output, false)
+    }
 }
 
 fn execute_serve_command(port: u16) -> anyhow::Result<()> {
@@ -127,8 +150,8 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Compress { input, output, quantize } => {
-            execute_compress_command(&input, &output, quantize)?;
+        Commands::Compress { input, output, format, quantize, pq_subspaces, pq_centroids } => {
+            execute_compress_command(&input, &output, &format, quantize, pq_subspaces, pq_centroids)?;
         }
         Commands::Bench { save_report, open_report, summary, report_dir: _, bench_args } => {
             // Run cargo bench for vectro_lib and stream output. Show a spinner while running.
@@ -180,7 +203,7 @@ fn main() -> anyhow::Result<()> {
                     if summary {
                         // parse JSON summaries in target/criterion/*/new/*.json and present a clean table
                         if let Ok(entries) = fs::read_dir(&crit_dir) {
-                            let mut rows: Vec<(String, Option<f64>, Option<f64>, Option<String>)> = Vec::new();
+                            let mut rows: Vec<BenchRow> = Vec::new();
                             for e in entries.flatten() {
                                 let p = e.path();
                                 if p.is_dir() {
@@ -454,14 +477,10 @@ fn get_estimate(v: &Value, key: &str) -> Option<f64> {
     if let Some(direct) = find_number_in_json(v, key) { return Some(direct); }
     // try path: estimates -> key -> point_estimate
     if let Value::Object(map) = v {
-        if let Some(est) = map.get("estimates") {
-            if let Value::Object(est_map) = est {
-                if let Some(kv) = est_map.get(key) {
-                    if let Value::Object(kmap) = kv {
-                        if let Some(pe) = kmap.get("point_estimate") {
-                            return pe.as_f64();
-                        }
-                    }
+        if let Some(Value::Object(est_map)) = map.get("estimates") {
+            if let Some(Value::Object(kmap)) = est_map.get(key) {
+                if let Some(pe) = kmap.get("point_estimate") {
+                    return pe.as_f64();
                 }
             }
         }
@@ -485,7 +504,7 @@ fn get_bench_name(v: &Value) -> Option<String> {
 }
 
 /// Generate a compact HTML summary from benchmark results
-fn generate_html_summary(rows: &[(String, Option<f64>, Option<f64>, Option<String>)], history: &std::collections::HashMap<String, f64>) -> String {
+fn generate_html_summary(rows: &[BenchRow], history: &std::collections::HashMap<String, f64>) -> String {
     let mut html = String::from(r#"<!DOCTYPE html>
 <html>
 <head>
@@ -666,7 +685,7 @@ mod tests {
         let tmp_out = NamedTempFile::new().unwrap();
         let out_path = tmp_out.path().to_str().unwrap();
         
-        let result = execute_compress_command(in_path, out_path, false);
+        let result = execute_compress_command(in_path, out_path, "stream", false, 8, 256);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1);
     }
@@ -683,7 +702,7 @@ mod tests {
         let tmp_out = NamedTempFile::new().unwrap();
         let out_path = tmp_out.path().to_str().unwrap();
         
-        let result = execute_compress_command(in_path, out_path, true);
+        let result = execute_compress_command(in_path, out_path, "stream", true, 8, 256);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 2);
     }
@@ -695,7 +714,7 @@ mod tests {
         let tmp_out = NamedTempFile::new().unwrap();
         let out_path = tmp_out.path().to_str().unwrap();
         
-        let result = execute_compress_command("/nonexistent/file.jsonl", out_path, false);
+        let result = execute_compress_command("/nonexistent/file.jsonl", out_path, "stream", false, 8, 256);
         assert!(result.is_err());
     }
 
@@ -779,7 +798,7 @@ mod tests {
         
         if let Ok(cli) = cli {
             match cli.command {
-                Commands::Compress { input, output, quantize } => {
+                Commands::Compress { input, output, quantize, .. } => {
                     assert_eq!(input, "input.jsonl");
                     assert_eq!(output, "output.bin");
                     assert!(!quantize);

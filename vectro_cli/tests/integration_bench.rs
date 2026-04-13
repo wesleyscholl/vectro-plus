@@ -33,6 +33,7 @@ fn test_bench_history_persistence() {
 }
 
 #[test]
+#[allow(clippy::type_complexity)]
 fn test_bench_summary_data_format() {
     // Test bench summary data structure
     let rows: Vec<(String, Option<f64>, Option<f64>, Option<String>)> = vec![
@@ -101,7 +102,7 @@ fn test_html_report_generation() {
     for (name, med, mean, unit) in &rows {
         let med_str = med.map(|v| format!("{:.6}", v)).unwrap_or_else(|| "-".to_string());
         let mean_str = mean.map(|v| format!("{:.6}", v)).unwrap_or_else(|| "-".to_string());
-        let unit_str = unit.clone().unwrap_or_else(|| "".to_string());
+        let _unit_str = unit.clone().unwrap_or_else(|| "".to_string());
         
         assert!(!med_str.is_empty());
         assert!(!mean_str.is_empty());

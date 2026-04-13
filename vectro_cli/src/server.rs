@@ -27,6 +27,12 @@ impl AppState {
     }
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // API request/response types
 #[derive(Debug, Deserialize)]
 pub struct SearchRequest {

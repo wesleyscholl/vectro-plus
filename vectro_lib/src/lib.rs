@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write, Seek, SeekFrom};
 
+pub mod pq;
+pub use pq::ProductQuantizer;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Embedding {
     pub id: String,
@@ -55,9 +58,11 @@ impl EmbeddingDataset {
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let mut f = File::open(path)?;
         // detect if file is our streaming format by checking header
-        let header = b"VECTRO+STREAM1\n";
+        let header  = b"VECTRO+STREAM1\n";
         let qheader = b"VECTRO+QSTREAM1\n";
-        let max_len = std::cmp::max(header.len(), qheader.len());
+        let pqheader = b"VECTRO+PQSTREAM1\n";
+        // pqheader is longest at 17 bytes
+        let max_len = pqheader.len();
         let mut sig = vec![0u8; max_len];
         let n = f.read(&mut sig)?;
         // reset cursor so each branch can read from the start as needed
@@ -133,6 +138,39 @@ impl EmbeddingDataset {
             }
 
         // fallback: rewind and read whole-file bincode
+        f.seek(SeekFrom::Start(0))?;
+
+        // ─── PQSTREAM1 ────────────────────────────────────────────────────
+        let mut pqsig = vec![0u8; pqheader.len()];
+        if f.read_exact(&mut pqsig).is_ok() && pqsig.as_slice() == pqheader {
+            // Layout: [u32 pq_blob_len][pq_blob] then records [u32 rec_len][bincode((id, code))]
+            let mut buf4 = [0u8; 4];
+            f.read_exact(&mut buf4)?;
+            let pq_blob_len = u32::from_le_bytes(buf4) as usize;
+            let mut pqbuf = vec![0u8; pq_blob_len];
+            f.read_exact(&mut pqbuf)?;
+            let pq: crate::pq::ProductQuantizer = bincode::deserialize(&pqbuf)?;
+
+            let mut embeddings = Vec::new();
+            loop {
+                let mut lenbuf = [0u8; 4];
+                match f.read_exact(&mut lenbuf) {
+                    Ok(_) => {
+                        let len = u32::from_le_bytes(lenbuf) as usize;
+                        let mut buf = vec![0u8; len];
+                        f.read_exact(&mut buf)?;
+                        let (id, code): (String, Vec<u8>) = bincode::deserialize(&buf)?;
+                        // Reconstruct approximate f32 vector from PQ code.
+                        let v = pq.decode(&code);
+                        embeddings.push(Embedding::new(id, v));
+                    }
+                    Err(_) => break,
+                }
+            }
+            return Ok(EmbeddingDataset { embeddings });
+        }
+
+        // ─── bincode fallback ─────────────────────────────────────────────
         f.seek(SeekFrom::Start(0))?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;

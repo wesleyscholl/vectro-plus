@@ -12,6 +12,32 @@ All notable changes to Vectro+ will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-07-08
+
+### ✨ Added — v1.2.0: Product Quantization
+
+#### 🗜️ New Format: `VECTRO+PQSTREAM1`
+- **Product Quantization (PQ)** compression module — `vectro_lib/src/pq.rs`
+- `ProductQuantizer` struct: train/encode/decode/search in a single serializable type
+- **Compression**: ≥ 16× vs raw f32 (e.g. 768d m=8 → 32× compression)
+- **Recall gate**: recall@10 ≥ 0.90 enforced by test `test_pq_recall_at_10_gate`
+- **ADC search**: Asymmetric Distance Computation for sub-linear approximate cosine search
+- K-means training: deterministic centroid init, rayon-parallel per-subspace Lloyd's
+- Vectors L2-normalized before encode/train; centroids L2-normalized after each update
+- `EmbeddingDataset::load()` reads `VECTRO+PQSTREAM1` files transparently
+
+#### 🖥️ CLI
+- `vectro compress --format pq` writes PQSTREAM1 output
+- `--pq-subspaces N` (default 8): encoded bytes per vector; must divide `dim`
+- `--pq-centroids K` (default 256): centroids per subspace (1–256)
+- `--format scalar` / `--format stream` remain available; `--quantize` kept for back-compat
+
+#### 📐 Benchmarks
+- `pq_encode`, `pq_decode`, `pq_adc_topk` Criterion benchmarks in `quant_bench.rs`
+
+### 📋 Changed
+- `QSTREAM.md` — added `VECTRO+PQSTREAM1` format specification
+
 ## [1.1.0] - 2024-12-19
 
 ### ✨ Added - Python Bindings & Enhanced APIs

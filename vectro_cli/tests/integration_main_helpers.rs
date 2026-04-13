@@ -4,7 +4,7 @@ use vectro_lib::{Embedding, EmbeddingDataset};
 #[test]
 fn test_toy_dataset_generation() {
     // Test that the default toy dataset is properly generated
-    let embeddings = vec![
+    let embeddings = [
         Embedding::new("apple", vec![1.0, 0.0, 0.0]),
         Embedding::new("banana", vec![0.9, 0.1, 0.0]),
         Embedding::new("orange", vec![0.8, 0.2, 0.0]),
@@ -26,7 +26,7 @@ fn test_search_with_toy_data() {
     ];
     
     let index = SearchIndex::from_dataset(&embeddings);
-    let results = index.top_k(&vec![0.9, 0.1, 0.0], 2);
+    let results = index.top_k(&[0.9_f32, 0.1, 0.0], 2);
     
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0, "doc1"); // Closest match
@@ -57,7 +57,7 @@ fn test_compress_and_search_workflow() {
     assert_eq!(ds.len(), 3);
     
     let index = vectro_lib::search::SearchIndex::from_dataset(&ds.embeddings);
-    let results = index.top_k(&vec![1.0, 0.0, 0.0], 1);
+    let results = index.top_k(&[1.0_f32, 0.0, 0.0], 1);
     assert_eq!(results[0].0, "test1");
 }
 
