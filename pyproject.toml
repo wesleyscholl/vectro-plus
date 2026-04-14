@@ -1,0 +1,62 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "vectro-plus"
+version = "1.5.0"
+description = "High-performance vector compression and similarity search"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Wesley Scholl", email = "128409641+wesleyscholl@users.noreply.github.com" },
+]
+keywords = [
+    "embeddings",
+    "vector-search",
+    "similarity-search",
+    "compression",
+    "quantization",
+    "hnsw",
+    "ann",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.8"
+dependencies = ["numpy>=1.20"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "numpy>=1.20",
+]
+
+[project.urls]
+Homepage = "https://github.com/wesleyscholl/vectro-plus"
+Repository = "https://github.com/wesleyscholl/vectro-plus"
+Issues = "https://github.com/wesleyscholl/vectro-plus/issues"
+Changelog = "https://github.com/wesleyscholl/vectro-plus/blob/main/CHANGELOG.md"
+
+[tool.maturin]
+# Python source lives in python/; the compiled extension is placed at
+# python/vectro_plus/vectro_py.cpython-*.so to match the import in __init__.py:
+#   from .vectro_py import (PyEmbedding as Embedding, ...)
+python-source = "python"
+module-name = "vectro_plus.vectro_py"
+manifest-path = "vectro_py/Cargo.toml"
+features = ["pyo3/extension-module"]
+# Include type stubs in the wheel
+include = ["python/vectro_plus/__init__.pyi"]

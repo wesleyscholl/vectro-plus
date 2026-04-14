@@ -12,6 +12,44 @@ All notable changes to Vectro+ will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-04-13
+
+### ✨ Added — v1.5.0: PyPI Distribution
+
+#### 📦 Maturin Build System
+- `pyproject.toml` replaces `setup.py` as the authoritative build configuration
+- Build backend: `maturin>=1.5,<2.0`; compiled extension lands at `vectro_plus.vectro_py`
+- `python-source = "python"` — all Python source in `python/` is packaged automatically
+- Supports Python 3.8–3.12; `abi3-py38` stable ABI
+
+#### 🐍 Type Stubs
+- `python/vectro_plus/__init__.pyi` — comprehensive PEP 561 stubs for the full public API
+  - `Embedding`, `EmbeddingDataset`, `SearchIndex`, `QuantizedIndex`
+  - `compress_embeddings`, `analyze_compression_quality`, `benchmark_search_performance`
+  - `VectroConfig`, `create_index`, `create_quantized_index`, `search_similar`, `batch_search`
+  - `load_embeddings_from_array`, `generate_quality_report`, `save_index`, `load_index`
+  - `info`, `version`, `__version__`, `__author__`, `__description__`
+
+#### ⚙️ GitHub Actions Workflows
+- `.github/workflows/ci.yml` — runs on every push/PR:
+  - `cargo test` + `cargo clippy -- -D warnings` on ubuntu-latest
+  - `maturin develop` + `pytest python/tests/` on ubuntu-latest × macos-latest × Python 3.9/3.11/3.12
+- `.github/workflows/release.yml` — triggered on `v*` tags:
+  - Builds manylinux x86_64 + aarch64 wheels via `PyO3/maturin-action@v1`
+  - Builds macOS arm64 + x86_64 wheels
+  - Builds source distribution (`maturin sdist`)
+  - Publishes all artifacts to PyPI via OIDC trusted publishing
+
+### 🗑️ Removed
+- `setup.py` — superseded by `pyproject.toml` + Maturin
+
+### 📋 Changed
+- `vectro_lib`, `vectro_cli`, `vectro_py` bumped to version 1.5.0
+- `__version__` in the Rust extension updated to `"1.5.0"`
+- `__version__` fallback in `__init__.py` updated to `"1.5.0"`
+
+---
+
 ## [1.4.0] - 2026-04-13
 
 ### ✨ Added — v1.4.0: Real-World Benchmarks
