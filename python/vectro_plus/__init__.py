@@ -127,6 +127,9 @@ def create_index(vectors: np.ndarray,
     """
     if not _rust_available:
         raise RuntimeError("Rust extension not available. Please install properly.")
+
+    if len(vectors) == 0:
+        raise ValueError("Cannot create index from empty vector set")
         
     config = config or VectroConfig()
     
@@ -164,6 +167,9 @@ def create_quantized_index(vectors: np.ndarray,
     """
     if not _rust_available:
         raise RuntimeError("Rust extension not available. Please install properly.")
+
+    if len(vectors) == 0:
+        raise ValueError("Cannot create index from empty vector set")
         
     config = config or VectroConfig()
     

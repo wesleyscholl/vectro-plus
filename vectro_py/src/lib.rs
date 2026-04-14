@@ -1,5 +1,6 @@
 #![allow(non_local_definitions)]
 use pyo3::prelude::*;
+use pyo3::exceptions::PyValueError;
 use pyo3::types::{PyList, PyTuple};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use ndarray::{Array1, Array2};
@@ -111,12 +112,14 @@ impl PyEmbeddingDataset {
 struct PySearchIndex {
     inner: SearchIndex,
     id_to_index: HashMap<String, usize>,
+    dim: usize,
 }
 
 #[pymethods]
 impl PySearchIndex {
     #[staticmethod]
     fn from_dataset(dataset: &PyEmbeddingDataset) -> PyResult<Self> {
+        let dim = dataset.inner.embeddings.first().map(|e| e.vector.len()).unwrap_or(0);
         let index = SearchIndex::from_dataset(&dataset.inner.embeddings);
         
         // Build ID->index mapping
@@ -125,21 +128,29 @@ impl PySearchIndex {
             id_to_index.insert(embedding.id.clone(), idx);
         }
         
-        Ok(Self { inner: index, id_to_index })
+        Ok(Self { inner: index, id_to_index, dim })
     }
 
+    #[getter]
+    fn dim(&self) -> usize { self.dim }
+
     fn search_vector(&self, py: Python<'_>, query: PyReadonlyArray1<f32>, top_k: usize) -> PyResult<Py<PyTuple>> {
+        if top_k == 0 {
+            return Err(PyValueError::new_err("top_k must be a positive integer"));
+        }
         let query_vec = query.as_array().to_vec();
+        if self.dim > 0 && query_vec.len() != self.dim {
+            return Err(PyValueError::new_err(format!(
+                "Query dimension {} does not match index dimension {}",
+                query_vec.len(), self.dim
+            )));
+        }
         let results = self.inner.top_k(&query_vec, top_k);
-        
         let mut indices = Vec::new();
         let mut similarities = Vec::new();
         
         // The results are (id, similarity) pairs, we need to convert to indices
         for (id, similarity) in results {
-            // Find the index of this ID in the original dataset
-            // Note: This is inefficient but works for the demo
-            // In production, we'd want to store ID->index mapping
             if let Some(index) = self.find_id_index(id) {
                 indices.push(index);
                 similarities.push(similarity);
@@ -197,12 +208,14 @@ impl PySearchIndex {
 struct PyQuantizedIndex {
     inner: QuantizedIndex,
     id_to_index: HashMap<String, usize>,
+    dim: usize,
 }
 
 #[pymethods]
 impl PyQuantizedIndex {
     #[staticmethod]
     fn from_dataset(dataset: &PyEmbeddingDataset) -> PyResult<Self> {
+        let dim = dataset.inner.embeddings.first().map(|e| e.vector.len()).unwrap_or(0);
         let index = QuantizedIndex::from_dataset(&dataset.inner.embeddings);
         
         // Build ID->index mapping
@@ -211,11 +224,23 @@ impl PyQuantizedIndex {
             id_to_index.insert(embedding.id.clone(), idx);
         }
         
-        Ok(Self { inner: index, id_to_index })
+        Ok(Self { inner: index, id_to_index, dim })
     }
 
+    #[getter]
+    fn dim(&self) -> usize { self.dim }
+
     fn search_vector(&self, py: Python<'_>, query: PyReadonlyArray1<f32>, top_k: usize) -> PyResult<Py<PyTuple>> {
+        if top_k == 0 {
+            return Err(PyValueError::new_err("top_k must be a positive integer"));
+        }
         let query_vec = query.as_array().to_vec();
+        if self.dim > 0 && query_vec.len() != self.dim {
+            return Err(PyValueError::new_err(format!(
+                "Query dimension {} does not match index dimension {}",
+                query_vec.len(), self.dim
+            )));
+        }
         let results = self.inner.top_k(&query_vec, top_k);
         
         let mut indices = Vec::new();
@@ -271,6 +296,7 @@ fn compress_embeddings(py: Python<'_>, vectors: PyReadonlyArray2<f32>, ids: Opti
     }
     
     // Create both regular and quantized indices
+    let dim = dataset.embeddings.first().map(|e| e.vector.len()).unwrap_or(0);
     let search_index = SearchIndex::from_dataset(&dataset.embeddings);
     let quantized_index = QuantizedIndex::from_dataset(&dataset.embeddings);
     
@@ -282,11 +308,13 @@ fn compress_embeddings(py: Python<'_>, vectors: PyReadonlyArray2<f32>, ids: Opti
     
     let py_search_index = PySearchIndex { 
         inner: search_index, 
-        id_to_index: id_to_index.clone()
+        id_to_index: id_to_index.clone(),
+        dim,
     };
     let py_quantized_index = PyQuantizedIndex { 
         inner: quantized_index, 
-        id_to_index
+        id_to_index,
+        dim,
     };
     
     Ok(PyTuple::new(py, &[

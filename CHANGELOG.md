@@ -5,12 +5,15 @@ All notable changes to Vectro+ will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-# Changelog
+## [Unreleased]
 
-All notable changes to Vectro+ will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+### 🐛 Fixed — CI: Python error-handling tests
+- `PySearchIndex::search_vector` now raises `ValueError` when `top_k == 0` or query dimension mismatches index dimension
+- `PyQuantizedIndex::search_vector` same validation — consistent behaviour across both index types
+- `PySearchIndex` and `PyQuantizedIndex` now store and expose a `dim` field (Python getter)
+- `PyQuantizedIndex::from_dataset` and `compress_embeddings` updated to compute and propagate `dim`
+- `create_index` and `create_quantized_index` (Python) raise `ValueError` on empty input arrays
+- Fixes three `TestErrorHandling` tests that previously received silent empty results instead of exceptions
 
 ## [2.0.0] - 2026-04-13
 
