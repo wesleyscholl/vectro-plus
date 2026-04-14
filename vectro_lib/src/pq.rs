@@ -142,6 +142,13 @@ impl ProductQuantizer {
         out
     }
 
+    /// Compression ratio: bytes per vector (f32) divided by bytes per code (m bytes).
+    ///
+    /// For a 768-dim vector with m=8 subspaces: 768×4 / 8 = 384×.
+    pub fn compression_ratio(&self) -> f32 {
+        (self.dim as f32 * 4.0) / self.m as f32
+    }
+
     /// ADC (Asymmetric Distance Computation) search — approximate cosine similarity.
     ///
     /// For each subspace `s` and centroid `c`, the lookup table entry is

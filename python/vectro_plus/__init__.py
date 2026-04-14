@@ -50,7 +50,7 @@ except ImportError as e:
     print(f"Warning: Rust extension not available: {e}")
     print("Falling back to Python-only implementation")
     _rust_available = False
-    __version__ = "1.5.0"
+    __version__ = "2.0.0"
     __author__ = "Wesley Scholl"
     __description__ = "Python bindings for Vectro+ (fallback mode)"
 

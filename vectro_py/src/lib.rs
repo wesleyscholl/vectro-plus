@@ -394,7 +394,7 @@ fn vectro_py(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(benchmark_search_performance, m)?)?;
     
     // Add version info
-    m.add("__version__", "1.5.0")?;
+    m.add("__version__", "2.0.0")?;
     m.add("__author__", "Wesley Scholl")?;
     m.add("__description__", "Python bindings for Vectro+ high-performance vector compression and search")?;
     

@@ -8,6 +8,15 @@ pub use hnsw::HnswIndex;
 pub mod pq;
 pub use pq::ProductQuantizer;
 
+pub mod nf4;
+pub use nf4::Nf4Quantizer;
+
+pub mod rq;
+pub use rq::ResidualQuantizer;
+
+pub mod auto_quantize;
+pub use auto_quantize::{auto_select_format, AutoQuantizeResult, QuantFormat};
+
 /// Compute recall@k between an exact (ground-truth) result set and an approximate result set.
 ///
 /// Both slices should contain the top-k IDs in descending similarity order. Only the first
@@ -169,6 +178,68 @@ impl EmbeddingDataset {
                 }
                 return Ok(EmbeddingDataset { embeddings });
             }
+
+        // ─── NF4STREAM1 ───────────────────────────────────────────────────
+        let nf4header = b"VECTRO+NF4STREAM1\n";
+        f.seek(SeekFrom::Start(0))?;
+        let mut nf4sig = vec![0u8; nf4header.len()];
+        if f.read_exact(&mut nf4sig).is_ok() && nf4sig.as_slice() == nf4header {
+            // Layout: [u32 dim][u32 n_vecs] then records [bincode((id, packed: Vec<u8>, scale: f32))]
+            let mut buf4 = [0u8; 4];
+            f.read_exact(&mut buf4)?;
+            let dim = u32::from_le_bytes(buf4) as usize;
+            f.read_exact(&mut buf4)?;
+            let _n_vecs = u32::from_le_bytes(buf4) as usize;
+            let q = crate::nf4::Nf4Quantizer::new();
+            let mut embeddings = Vec::new();
+            loop {
+                let mut lenbuf = [0u8; 4];
+                match f.read_exact(&mut lenbuf) {
+                    Ok(_) => {
+                        let len = u32::from_le_bytes(lenbuf) as usize;
+                        let mut buf = vec![0u8; len];
+                        f.read_exact(&mut buf)?;
+                        let (id, packed, scale): (String, Vec<u8>, f32) =
+                            bincode::deserialize(&buf)?;
+                        let v = q.decode_single(&packed, scale, dim);
+                        embeddings.push(Embedding::new(id, v));
+                    }
+                    Err(_) => break,
+                }
+            }
+            return Ok(EmbeddingDataset { embeddings });
+        }
+
+        // ─── RQSTREAM1 ────────────────────────────────────────────────────
+        let rqheader = b"VECTRO+RQSTREAM1\n";
+        f.seek(SeekFrom::Start(0))?;
+        let mut rqsig = vec![0u8; rqheader.len()];
+        if f.read_exact(&mut rqsig).is_ok() && rqsig.as_slice() == rqheader {
+            // Layout: [u32 rq_blob_len][rq_blob] then records [u32 rec_len][bincode((id, codes))]
+            let mut buf4 = [0u8; 4];
+            f.read_exact(&mut buf4)?;
+            let rq_blob_len = u32::from_le_bytes(buf4) as usize;
+            let mut rqbuf = vec![0u8; rq_blob_len];
+            f.read_exact(&mut rqbuf)?;
+            let rq: crate::rq::ResidualQuantizer = bincode::deserialize(&rqbuf)?;
+            let mut embeddings = Vec::new();
+            loop {
+                let mut lenbuf = [0u8; 4];
+                match f.read_exact(&mut lenbuf) {
+                    Ok(_) => {
+                        let len = u32::from_le_bytes(lenbuf) as usize;
+                        let mut buf = vec![0u8; len];
+                        f.read_exact(&mut buf)?;
+                        let (id, codes): (String, Vec<Vec<u8>>) =
+                            bincode::deserialize(&buf)?;
+                        let v = rq.decode(&codes);
+                        embeddings.push(Embedding::new(id, v));
+                    }
+                    Err(_) => break,
+                }
+            }
+            return Ok(EmbeddingDataset { embeddings });
+        }
 
         // fallback: rewind and read whole-file bincode
         f.seek(SeekFrom::Start(0))?;

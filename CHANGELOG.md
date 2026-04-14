@@ -12,6 +12,45 @@ All notable changes to Vectro+ will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-04-13
+
+### ✨ Added — v2.0.0: Research Port (NF4, RQ, AutoQuantize)
+
+#### 🧮 vectro_lib — New Quantization Modules
+- `vectro_lib/src/nf4.rs` — 4-bit NormalFloat quantization (`Nf4Quantizer`)
+  - QLoRA-paper 16-level codebook; compile-time `THRESHOLDS` for O(1) `partition_point` lookup
+  - Per-vector abs-max scaling; packed 2 nibbles/byte; ~8× compression; cosine ≥ 0.98 at d=768
+  - `decode_single()` for single-record deserialization in `EmbeddingDataset::load()`
+- `vectro_lib/src/rq.rs` — Residual Quantizer (`ResidualQuantizer`)
+  - Multi-pass Lloyd's k-means on raw (un-normalised) residuals; `rayon`-parallel subspace training
+  - Adaptive zero-padding when `dim % m != 0`; ~16–192× compression
+- `vectro_lib/src/auto_quantize.rs` — Automatic format selection (`auto_select_format`)
+  - Kurtosis-based routing: Gaussian → NF4→RQ→PQ→Scalar; heavy-tailed → PQ→RQ→NF4→Scalar
+  - Returns first format meeting `target_cosine ≥ 0.97` AND `target_compression ≥ 8×`
+  - `QuantFormat` enum (`Nf4 | Rq | Pq | Scalar | Stream`) with `Display`
+  - `AutoQuantizeResult` carries the trained `ProductQuantizer` or `ResidualQuantizer` when selected
+
+#### 🗃️ Format Detection
+- `EmbeddingDataset::load()` now detects and decodes `VECTRO+NF4STREAM1\n` and `VECTRO+RQSTREAM1\n` headers
+- NF4 stream record layout: `(id, packed: Vec<u8>, scale: f32)` per vector
+- RQ stream record layout: `(id, codes: Vec<Vec<u8>>)` per vector (one code slice per pass)
+
+#### 🖥️ CLI — New Formats
+- `--format nf4` — encode to NF4 4-bit stream
+- `--format rq` — encode to Residual Quantizer stream
+- `--format auto` — evaluate and select best format automatically
+- `--rq-passes N` — number of residual passes (default 2)
+- `--rq-subspaces N` — RQ subspaces per pass (default 8)
+
+#### 🛠 vectro_lib Improvements
+- `ProductQuantizer::compression_ratio()` — new method returning `(dim × 4) / m`; used by `auto_quantize`
+
+### 📋 Gate Results
+- NF4 cosine similarity ≥ 0.98 at dim=768 (contract: ≥ 0.98) ✅
+- RQ cosine similarity ≥ 0.75 on 100 training vectors (contract: ≥ 0.75) ✅
+- RQ compression ratio ≥ 30× (contract: ≥ 16×) ✅
+- δ recall@10 vs vectro Python reference: pending GloVe-100d evaluation run
+
 ## [1.5.0] - 2026-04-13
 
 ### ✨ Added — v1.5.0: PyPI Distribution

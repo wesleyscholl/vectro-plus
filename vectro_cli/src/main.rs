@@ -17,7 +17,7 @@
 //! ```
 
 use clap::{Parser, Subcommand};
-use vectro_cli::{compress_stream, compress_pq};
+use vectro_cli::{compress_stream, compress_pq, compress_nf4, compress_rq, compress_auto};
 
 use serde_json::Value;
 
@@ -38,20 +38,27 @@ enum Commands {
     Compress {
         input: String,
         output: String,
-        /// Compression format: `stream` (raw f32), `scalar` (u8 per-dim), or `pq` (Product Quantization).
+        /// Compression format: `stream` (raw f32), `scalar` (u8 per-dim), `pq` (Product Quantization),
+        /// `nf4` (4-bit NormalFloat), `rq` (Residual Quantization), `auto` (auto-select).
         /// Overrides `--quantize` when specified.
         #[arg(long, default_value = "stream")]
         format: String,
         #[arg(long, default_value_t = false)]
         /// Shorthand for `--format scalar` (kept for backward compatibility).
         quantize: bool,
-        /// Number of PQ subspaces (bytes per encoded vector). Used with `--format pq`.
+        /// Number of PQ subspaces (bytes per encoded vector). Used with `--format pq` and `rq`.
         /// Must divide the vector dimension. Lower → higher compression, lower recall.
         #[arg(long, default_value_t = 8usize)]
         pq_subspaces: usize,
-        /// Centroids per PQ subspace. Must be ≤ 256. Used with `--format pq`.
+        /// Centroids per PQ subspace. Must be ≤ 256. Used with `--format pq` and `rq`.
         #[arg(long, default_value_t = 256usize)]
         pq_centroids: usize,
+        /// Number of residual passes for `--format rq`. More passes → lower reconstruction error.
+        #[arg(long, default_value_t = 2usize)]
+        rq_passes: usize,
+        /// Number of RQ subspaces per pass for `--format rq`. Must divide vector dimension.
+        #[arg(long, default_value_t = 8usize)]
+        rq_subspaces: usize,
     },
     /// Run library benchmarks (uses the `vectro_lib` bench harness).
     /// Streams benchmark output and shows a spinner while running.
@@ -166,6 +173,7 @@ enum IndexAction {
 }
 
 // Wrapper functions for testability
+#[allow(clippy::too_many_arguments)]
 fn execute_compress_command(
     input: &str,
     output: &str,
@@ -173,13 +181,22 @@ fn execute_compress_command(
     quantize: bool,
     pq_subspaces: usize,
     pq_centroids: usize,
+    rq_passes: usize,
+    rq_subspaces: usize,
 ) -> anyhow::Result<usize> {
-    if format == "pq" {
-        compress_pq(input, output, pq_subspaces, pq_centroids)
-    } else if format == "scalar" || quantize {
-        compress_stream(input, output, true)
-    } else {
-        compress_stream(input, output, false)
+    match format {
+        "pq"     => compress_pq(input, output, pq_subspaces, pq_centroids),
+        "nf4"    => compress_nf4(input, output),
+        "rq"     => compress_rq(input, output, rq_passes, rq_subspaces, pq_centroids),
+        "auto"   => compress_auto(input, output, 0.97, 8.0),
+        "scalar" => compress_stream(input, output, true),
+        _        => {
+            if quantize {
+                compress_stream(input, output, true)
+            } else {
+                compress_stream(input, output, false)
+            }
+        }
     }
 }
 
@@ -229,8 +246,8 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Compress { input, output, format, quantize, pq_subspaces, pq_centroids } => {
-            execute_compress_command(&input, &output, &format, quantize, pq_subspaces, pq_centroids)?;
+        Commands::Compress { input, output, format, quantize, pq_subspaces, pq_centroids, rq_passes, rq_subspaces } => {
+            execute_compress_command(&input, &output, &format, quantize, pq_subspaces, pq_centroids, rq_passes, rq_subspaces)?;
         }
         Commands::Bench { save_report, open_report, summary, report_dir: _, bench_args } => {
             // Run cargo bench for vectro_lib and stream output. Show a spinner while running.
@@ -969,7 +986,7 @@ mod tests {
         let tmp_out = NamedTempFile::new().unwrap();
         let out_path = tmp_out.path().to_str().unwrap();
         
-        let result = execute_compress_command(in_path, out_path, "stream", false, 8, 256);
+        let result = execute_compress_command(in_path, out_path, "stream", false, 8, 256, 2, 8);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1);
     }
@@ -986,7 +1003,7 @@ mod tests {
         let tmp_out = NamedTempFile::new().unwrap();
         let out_path = tmp_out.path().to_str().unwrap();
         
-        let result = execute_compress_command(in_path, out_path, "stream", true, 8, 256);
+        let result = execute_compress_command(in_path, out_path, "stream", true, 8, 256, 2, 8);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 2);
     }
@@ -998,7 +1015,7 @@ mod tests {
         let tmp_out = NamedTempFile::new().unwrap();
         let out_path = tmp_out.path().to_str().unwrap();
         
-        let result = execute_compress_command("/nonexistent/file.jsonl", out_path, "stream", false, 8, 256);
+        let result = execute_compress_command("/nonexistent/file.jsonl", out_path, "stream", false, 8, 256, 2, 8);
         assert!(result.is_err());
     }
 

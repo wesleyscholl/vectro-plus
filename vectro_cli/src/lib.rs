@@ -316,6 +316,207 @@ pub fn compress_pq(input: &str, output: &str, m: usize, k: usize) -> anyhow::Res
     Ok(count)
 }
 
+// ─── NF4 ──────────────────────────────────────────────────────────────────────
+
+/// Compress a JSONL embedding file to `VECTRO+NF4STREAM1` format.
+///
+/// Each vector is scaled to abs-max=1 then quantized to 4-bit NormalFloat.
+/// Storage per vector: `ceil(dim/2)` bytes of packed nibbles + 4 bytes for the f32 scale.
+pub fn compress_nf4(input: &str, output: &str) -> anyhow::Result<usize> {
+    let nf4header = b"VECTRO+NF4STREAM1\n";
+    let embeddings = read_jsonl(input)?;
+    let count = embeddings.len();
+    if count == 0 {
+        return Ok(0);
+    }
+
+    let pb = ProgressBar::new(count as u64);
+    pb.set_style(
+        ProgressStyle::with_template("{spinner} [{bar:40}] {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("=> "),
+    );
+    pb.set_message("encoding NF4…");
+
+    let q = vectro_lib::Nf4Quantizer::new();
+    let vecs: Vec<Vec<f32>> = embeddings.iter().map(|e| e.vector.clone()).collect();
+    let (packed_list, scales) = q.encode(&vecs);
+
+    let dim = embeddings[0].vector.len() as u32;
+    let f = std::fs::File::create(output)?;
+    let mut w = std::io::BufWriter::new(f);
+
+    w.write_all(nf4header)?;
+    w.write_all(&dim.to_le_bytes())?;
+    w.write_all(&(count as u32).to_le_bytes())?;
+
+    for (i, emb) in embeddings.iter().enumerate() {
+        let rec = (emb.id.clone(), packed_list[i].clone(), scales[i]);
+        let bytes = bincode::serialize(&rec)?;
+        let len = (bytes.len() as u32).to_le_bytes();
+        w.write_all(&len)?;
+        w.write_all(&bytes)?;
+        pb.inc(1);
+    }
+    w.flush()?;
+
+    pb.finish_with_message(format!(
+        "wrote {} NF4-encoded entries to {}",
+        count, output
+    ));
+    Ok(count)
+}
+
+// ─── RQ ───────────────────────────────────────────────────────────────────────
+
+/// Compress a JSONL embedding file to `VECTRO+RQSTREAM1` format.
+///
+/// Trains a `ResidualQuantizer` with `n_passes` and `m` subspaces, then encodes
+/// each embedding as a list of code arrays (one per pass, one byte per subspace).
+pub fn compress_rq(
+    input: &str,
+    output: &str,
+    n_passes: usize,
+    m: usize,
+    k: usize,
+) -> anyhow::Result<usize> {
+    let rqheader = b"VECTRO+RQSTREAM1\n";
+    let embeddings = read_jsonl(input)?;
+    let count = embeddings.len();
+    if count == 0 {
+        return Ok(0);
+    }
+
+    let pb = ProgressBar::new(count as u64);
+    pb.set_style(
+        ProgressStyle::with_template("{spinner} [{bar:40}] {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("=> "),
+    );
+    pb.set_message(format!("training RQ (passes={}, m={}, k={})…", n_passes, m, k));
+
+    let mut rq = vectro_lib::ResidualQuantizer::new(n_passes, m, k);
+    rq.train(&embeddings, 15);
+
+    pb.set_message("encoding RQ…");
+    let rq_blob = bincode::serialize(&rq)?;
+
+    let f = std::fs::File::create(output)?;
+    let mut w = std::io::BufWriter::new(f);
+
+    w.write_all(rqheader)?;
+    let rq_len = (rq_blob.len() as u32).to_le_bytes();
+    w.write_all(&rq_len)?;
+    w.write_all(&rq_blob)?;
+
+    for emb in &embeddings {
+        let codes = rq.encode(&emb.vector);
+        let rec = (emb.id.clone(), codes);
+        let bytes = bincode::serialize(&rec)?;
+        let len = (bytes.len() as u32).to_le_bytes();
+        w.write_all(&len)?;
+        w.write_all(&bytes)?;
+        pb.inc(1);
+    }
+    w.flush()?;
+
+    pb.finish_with_message(format!("wrote {} RQ-encoded entries to {}", count, output));
+    Ok(count)
+}
+
+// ─── AUTO-QUANTIZE ────────────────────────────────────────────────────────────
+
+/// Compress a JSONL embedding file using the automatically-selected best format.
+///
+/// Evaluates NF4, RQ, PQ, and Scalar on a sample of up to 1 000 vectors and
+/// picks the first format that meets `target_cosine` (default 0.97) and
+/// `target_compression` (default 8×).
+pub fn compress_auto(
+    input: &str,
+    output: &str,
+    target_cosine: f32,
+    target_compression: f32,
+) -> anyhow::Result<usize> {
+    let embeddings = read_jsonl(input)?;
+    if embeddings.is_empty() {
+        return Ok(0);
+    }
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(ProgressStyle::with_template("{spinner} {msg}").unwrap());
+    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+    pb.set_message("evaluating formats for auto-select…");
+
+    let result =
+        vectro_lib::auto_select_format(&embeddings, target_cosine, target_compression, 1000);
+
+    pb.set_message(format!(
+        "selected format={} (cosine={:.4}, compression={:.1}x); compressing…",
+        result.format, result.cosine_sim, result.compression_ratio
+    ));
+
+    let n = match result.format {
+        vectro_lib::QuantFormat::Nf4    => compress_nf4(input, output)?,
+        vectro_lib::QuantFormat::Rq     => compress_rq(input, output, 2, 8, 64)?,
+        vectro_lib::QuantFormat::Pq     => compress_pq(
+            input, output,
+            result.pq.as_ref().map(|_| 8).unwrap_or(8),
+            256,
+        )?,
+        vectro_lib::QuantFormat::Scalar | vectro_lib::QuantFormat::Stream => {
+            compress_stream(input, output, true)?
+        }
+    };
+
+    pb.finish_with_message(format!(
+        "auto-compress complete: format={fmt} -> {n} records in {output}",
+        fmt = result.format
+    ));
+    Ok(n)
+}
+
+// ─── shared JSONL reader ──────────────────────────────────────────────────────
+
+fn read_jsonl(input: &str) -> anyhow::Result<Vec<vectro_lib::Embedding>> {
+    use std::io::BufRead;
+    let infile = std::fs::File::open(input)?;
+    let reader = std::io::BufReader::new(infile);
+    let mut embeddings = Vec::new();
+    for line in reader.lines().map_while(Result::ok) {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let mut added = false;
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let (Some(id), Some(vec)) = (val.get("id"), val.get("vector")) {
+                if let (Some(id_str), Some(arr)) = (id.as_str(), vec.as_array()) {
+                    let v: Vec<f32> = arr
+                        .iter()
+                        .filter_map(|x| x.as_f64().map(|f| f as f32))
+                        .collect();
+                    embeddings.push(vectro_lib::Embedding::new(id_str, v));
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 2 {
+                let id = parts[0].to_string();
+                let v: Vec<f32> = parts[1..]
+                    .iter()
+                    .filter_map(|p| p.trim().parse().ok())
+                    .collect();
+                if !v.is_empty() {
+                    embeddings.push(vectro_lib::Embedding::new(id, v));
+                }
+            }
+        }
+    }
+    Ok(embeddings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
