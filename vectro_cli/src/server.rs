@@ -9,13 +9,15 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
-use vectro_lib::{Embedding, EmbeddingDataset, search::SearchIndex};
+use vectro_lib::{Embedding, EmbeddingDataset, search::SearchIndex, hnsw::HnswIndex};
 
 // Shared application state
 #[derive(Clone)]
 pub struct AppState {
     index: Arc<RwLock<Option<SearchIndex>>>,
     embeddings: Arc<RwLock<Vec<Embedding>>>,
+    /// HNSW ANN index — built on demand via POST /api/index/build.
+    hnsw: Arc<RwLock<Option<HnswIndex>>>,
 }
 
 impl AppState {
@@ -23,6 +25,7 @@ impl AppState {
         Self {
             index: Arc::new(RwLock::new(None)),
             embeddings: Arc::new(RwLock::new(Vec::new())),
+            hnsw: Arc::new(RwLock::new(None)),
         }
     }
 }
@@ -73,6 +76,34 @@ pub struct StatsResponse {
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
+}
+
+// ── HNSW index request / response types ──────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct BuildIndexRequest {
+    /// Maximum connections per node per layer (default 16).
+    #[serde(default = "default_hnsw_m")]
+    pub m: usize,
+    /// Dynamic candidate list size during construction (default 200).
+    #[serde(default = "default_hnsw_ef_construction")]
+    pub ef_construction: usize,
+    /// Default candidate list size for queries (default 50).
+    #[serde(default = "default_hnsw_ef_search")]
+    pub ef_search: usize,
+}
+
+fn default_hnsw_m() -> usize { 16 }
+fn default_hnsw_ef_construction() -> usize { 200 }
+fn default_hnsw_ef_search() -> usize { 50 }
+
+#[derive(Debug, Serialize)]
+pub struct IndexBuildResponse {
+    pub vectors_indexed: usize,
+    pub m: usize,
+    pub ef_construction: usize,
+    pub ef_search: usize,
+    pub build_time_ms: f64,
 }
 
 // Route handlers
@@ -202,6 +233,88 @@ async fn index_page() -> Html<String> {
     Html(include_str!("../static/index.html").to_string())
 }
 
+// ── HNSW index handlers ─────────────────────────────────────────────────────────
+
+/// `POST /api/index/build` — build an HNSW index from the currently loaded embeddings.
+///
+/// Optional JSON body:
+/// ```json
+/// { "m": 16, "ef_construction": 200, "ef_search": 50 }
+/// ```
+async fn build_hnsw_index(
+    State(state): State<AppState>,
+    payload: Option<Json<BuildIndexRequest>>,
+) -> Result<Json<IndexBuildResponse>, (StatusCode, String)> {
+    let embeddings = state.embeddings.read().await;
+    if embeddings.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "No embeddings loaded. Upload embeddings first via POST /api/upload.".to_string(),
+        ));
+    }
+
+    let params = payload.map(|p| p.0).unwrap_or_default();
+    let (m, ef_construction, ef_search) = (params.m, params.ef_construction, params.ef_search);
+
+    let start = std::time::Instant::now();
+    let hnsw = HnswIndex::build(&embeddings, m, ef_construction, ef_search);
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let n = hnsw.len();
+
+    let mut hnsw_guard = state.hnsw.write().await;
+    *hnsw_guard = Some(hnsw);
+
+    Ok(Json(IndexBuildResponse {
+        vectors_indexed: n,
+        m,
+        ef_construction,
+        ef_search,
+        build_time_ms: elapsed_ms,
+    }))
+}
+
+impl Default for BuildIndexRequest {
+    fn default() -> Self {
+        Self {
+            m: default_hnsw_m(),
+            ef_construction: default_hnsw_ef_construction(),
+            ef_search: default_hnsw_ef_search(),
+        }
+    }
+}
+
+/// `POST /api/index/search` — search the HNSW index for approximate nearest neighbors.
+///
+/// Same request/response schema as `POST /api/search`.
+async fn search_hnsw_index(
+    State(state): State<AppState>,
+    Json(payload): Json<SearchRequest>,
+) -> Result<Json<SearchResponse>, (StatusCode, String)> {
+    let hnsw_guard = state.hnsw.read().await;
+    let hnsw = hnsw_guard.as_ref().ok_or((
+        StatusCode::NOT_FOUND,
+        "No HNSW index built. Call POST /api/index/build first.".to_string(),
+    ))?;
+
+    if payload.query.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Query vector must not be empty.".to_string()));
+    }
+
+    let start = std::time::Instant::now();
+    let results = hnsw.search(&payload.query, payload.k);
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+    let search_results: Vec<SearchResult> = results
+        .into_iter()
+        .map(|(id, score)| SearchResult { id, score })
+        .collect();
+
+    Ok(Json(SearchResponse {
+        results: search_results,
+        query_time_ms: elapsed_ms,
+    }))
+}
+
 fn build_cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(Any)
@@ -217,6 +330,8 @@ fn build_router(state: AppState) -> Router {
         .route("/api/search", post(search))
         .route("/api/upload", post(upload_embeddings))
         .route("/api/load", get(load_dataset_endpoint))
+        .route("/api/index/build", post(build_hnsw_index))
+        .route("/api/index/search", post(search_hnsw_index))
         .layer(build_cors_layer())
         .with_state(state)
 }
@@ -227,9 +342,11 @@ fn print_server_info(port: u16) {
     println!("🔍 API endpoints:");
     println!("   GET  /health");
     println!("   GET  /api/stats");
-    println!("   POST /api/search");
+    println!("   POST /api/search             (brute-force cosine)");
     println!("   POST /api/upload");
     println!("   GET  /api/load?path=<path>");
+    println!("   POST /api/index/build        (build HNSW ANN index)");
+    println!("   POST /api/index/search       (HNSW approximate search)");
 }
 
 pub async fn serve(port: u16) -> anyhow::Result<()> {

@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write, Seek, SeekFrom};
 
+pub mod hnsw;
+pub use hnsw::HnswIndex;
+
 pub mod pq;
 pub use pq::ProductQuantizer;
 

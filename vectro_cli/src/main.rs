@@ -84,6 +84,53 @@ enum Commands {
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
     },
+    /// Build or search a persistent HNSW approximate nearest-neighbor index.
+    ///
+    /// Example: `vectro index build embeddings.jsonl index.hnsw`
+    /// Example: `vectro index search "0.1,0.2,0.3" --index index.hnsw --top-k 5`
+    Index {
+        #[command(subcommand)]
+        action: IndexAction,
+    },
+}
+
+/// Sub-commands for the `vectro index` family.
+#[derive(Subcommand)]
+enum IndexAction {
+    /// Build an HNSW index from a dataset file and write it to disk.
+    ///
+    /// Example: `vectro index build embeddings.jsonl index.hnsw --m 16 --ef-construction 200`
+    Build {
+        /// Input dataset: JSONL or any Vectro binary format (.stream1, .qstream1, .pqstream1).
+        dataset: String,
+        /// Output path for the HNSW index (bincode).
+        output: String,
+        /// Maximum connections per node per layer.  Higher = better recall, slower build.
+        #[arg(long, default_value_t = 16usize)]
+        m: usize,
+        /// Dynamic candidate list size during construction.  Higher = better recall, slower build.
+        #[arg(long, default_value_t = 200usize)]
+        ef_construction: usize,
+        /// Default candidate list size for queries against this index.
+        #[arg(long, default_value_t = 50usize)]
+        ef_search: usize,
+    },
+    /// Search an existing HNSW index for approximate nearest neighbors.
+    ///
+    /// Example: `vectro index search "0.1,0.2" --index index.hnsw --top-k 10`
+    Search {
+        /// Query vector as comma-separated floats (e.g. \"0.1,0.2,0.3\").
+        query: String,
+        /// Path to the HNSW index file produced by `vectro index build`.
+        #[arg(long)]
+        index: String,
+        /// Number of approximate nearest neighbors to return.
+        #[arg(short, long, default_value_t = 10usize)]
+        top_k: usize,
+        /// Override the search beam width (higher = more recall, slower).
+        #[arg(long)]
+        ef: Option<usize>,
+    },
 }
 
 // Wrapper functions for testability
@@ -319,6 +366,40 @@ fn main() -> anyhow::Result<()> {
         Commands::Serve { port } => {
             execute_serve_command(port)?;
         }
+        Commands::Index { action } => match action {
+            IndexAction::Build { dataset, output, m, ef_construction, ef_search } => {
+                use vectro_lib::hnsw::HnswIndex;
+                let ds = vectro_lib::EmbeddingDataset::load(&dataset)
+                    .map_err(|e| { eprintln!("Error loading dataset: {}", e); e })?;
+                println!("Building HNSW index: {} vectors, M={}, ef_construction={}, ef_search={}",
+                    ds.len(), m, ef_construction, ef_search);
+                let hnsw = HnswIndex::build(&ds.embeddings, m, ef_construction, ef_search);
+                hnsw.save(&output)
+                    .map_err(|e| { eprintln!("Error saving index: {}", e); e })?;
+                println!("Index saved → {} ({} vectors)", output, hnsw.len());
+            }
+            IndexAction::Search { query, index, top_k, ef } => {
+                use vectro_lib::hnsw::HnswIndex;
+                let mut hnsw = HnswIndex::load(&index)
+                    .map_err(|e| { eprintln!("Error loading index: {}", e); e })?;
+                let vec = parse_query_string(&query);
+                if vec.is_empty() {
+                    eprintln!("Error: could not parse query vector from {:?}", query);
+                    std::process::exit(1);
+                }
+                if let Some(ef_val) = ef {
+                    hnsw.ef_search = ef_val;
+                }
+                let results = hnsw.search(&vec, top_k);
+                if results.is_empty() {
+                    println!("No results (index may be empty or query dimension mismatch).");
+                } else {
+                    for (i, (id, score)) in results.iter().enumerate() {
+                        println!("{:3}. {} (score: {:.6})", i + 1, id, score);
+                    }
+                }
+            }
+        },
     }
 
     Ok(())

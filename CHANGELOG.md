@@ -12,6 +12,41 @@ All notable changes to Vectro+ will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-04-13
+
+### ✨ Added — v1.3.0: HNSW ANN Index
+
+#### 🔍 New Module: `vectro_lib/src/hnsw.rs`
+- **Hierarchical Navigable Small World** (HNSW) ANN index — `HnswIndex` public struct
+- `HnswIndex::build(data, m, ef_construction, ef_search)` — batch build, O(N·M·log N) average
+- `HnswIndex::insert(&mut self, embedding)` — incremental single-vector insert
+- `HnswIndex::search(query, k)` → `Vec<(String, f32)>` sorted descending by cosine similarity
+- `HnswIndex::search_with_ef(query, k, ef)` — explicit beam-width override at query time
+- `HnswIndex::save(path)` / `HnswIndex::load(path)` — bincode serialization; save/load roundtrip verified
+- Cosine similarity via L2-normalization on insert; inner product of unit vectors
+- Custom xorshift64 PRNG for reproducible layer assignments — no external `rand` dep
+- Default parameters: M=16, ef_construction=200, ef_search=50
+- **Recall gate**: `test_recall_at_10_gate` enforces recall@10 ≥ 0.95 (1000 vectors, dim=64, 100 queries)
+- `pub use hnsw::HnswIndex` re-exported from `vectro_lib` crate root
+
+#### 🖥️ CLI
+- `vectro index build <dataset> <output>` — build and persist HNSW index to disk
+  - `--m N` (default 16), `--ef-construction N` (default 200), `--ef-search N` (default 50)
+- `vectro index search <query> --index <path>` — ANN search against a saved index
+  - `--top-k N` (default 10), `--ef N` to override search beam width at query time
+
+#### 🌐 REST API
+- `POST /api/index/build` — build HNSW from currently loaded embeddings; optional `{"m", "ef_construction", "ef_search"}` body
+- `POST /api/index/search` — ANN search; same `{"query", "k"}` body as `POST /api/search`
+
+#### 📐 Benchmarks
+- `hnsw_build_1k` and `hnsw_search_1k` Criterion benchmarks added to `quant_bench.rs`
+
+### 📋 Changed
+- `vectro_lib` and `vectro_cli` bumped to version `1.3.0`
+
+---
+
 ## [1.2.0] - 2025-07-08
 
 ### ✨ Added — v1.2.0: Product Quantization

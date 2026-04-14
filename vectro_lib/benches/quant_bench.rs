@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use vectro_lib::{Embedding, pq::ProductQuantizer, search::{SearchIndex, QuantizedIndex}};
+use vectro_lib::{Embedding, pq::ProductQuantizer, search::{SearchIndex, QuantizedIndex}, hnsw::HnswIndex};
 
 // synthetic dataset generator
 fn make_dataset(n: usize, dim: usize) -> Vec<Embedding> {
@@ -53,5 +53,19 @@ fn bench_pq(c: &mut Criterion) {
     c.bench_function("pq_adc_topk", |b| b.iter(|| pq.search_adc(&codes, &query, 10)));
 }
 
-criterion_group!(benches, bench_search, bench_pq);
+fn bench_hnsw(c: &mut Criterion) {
+    let ds = make_dataset(1000, 64);
+    let query = ds[0].vector.clone();
+
+    c.bench_function("hnsw_build_1k", |b| {
+        b.iter(|| HnswIndex::build(&ds, 16, 200, 50))
+    });
+
+    let hnsw = HnswIndex::build(&ds, 16, 200, 50);
+    c.bench_function("hnsw_search_1k", |b| {
+        b.iter(|| hnsw.search(&query, 10))
+    });
+}
+
+criterion_group!(benches, bench_search, bench_pq, bench_hnsw);
 criterion_main!(benches);
