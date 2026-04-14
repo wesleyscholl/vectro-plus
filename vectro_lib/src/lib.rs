@@ -8,6 +8,36 @@ pub use hnsw::HnswIndex;
 pub mod pq;
 pub use pq::ProductQuantizer;
 
+/// Compute recall@k between an exact (ground-truth) result set and an approximate result set.
+///
+/// Both slices should contain the top-k IDs in descending similarity order. Only the first
+/// `k` entries of each slice are considered; if a slice has fewer than `k` entries the
+/// missing entries count as misses.
+///
+/// # Formula
+/// recall@k = |approx_top_k ∩ exact_top_k| / k
+///
+/// # Examples
+/// ```
+/// use vectro_lib::recall_at_k;
+/// let exact  = ["a", "b", "c", "d", "e"].map(String::from);
+/// let approx = ["a", "c", "e", "f", "g"].map(String::from);
+/// assert!((recall_at_k(&exact, &approx, 5) - 0.6).abs() < 1e-6);
+/// ```
+pub fn recall_at_k(exact: &[String], approx: &[String], k: usize) -> f64 {
+    if k == 0 {
+        return 0.0;
+    }
+    let gt: std::collections::HashSet<&str> =
+        exact.iter().take(k).map(String::as_str).collect();
+    let hits = approx
+        .iter()
+        .take(k)
+        .filter(|id| gt.contains(id.as_str()))
+        .count();
+    hits as f64 / k as f64
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Embedding {
     pub id: String,

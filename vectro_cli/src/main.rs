@@ -92,6 +92,38 @@ enum Commands {
         #[command(subcommand)]
         action: IndexAction,
     },
+    /// Ground-truth recall & QPS evaluation for brute-force, HNSW, and PQ search.
+    ///
+    /// Uses a loaded dataset (or generates synthetic data) and evaluates recall@k and
+    /// queries-per-second for each algorithm against exact brute-force results.
+    ///
+    /// Example: `vectro bench-gt --vectors 10000 --dim 128 --queries 100 --save-report`
+    /// Example: `vectro bench-gt --dataset embeddings.stream1 --k 10`
+    #[command(name = "bench-gt")]
+    BenchGt {
+        /// Path to an existing dataset file (JSONL or any Vectro binary format).
+        /// If omitted, synthetic data is generated using `--vectors` and `--dim`.
+        #[arg(long)]
+        dataset: Option<String>,
+        /// Number of synthetic vectors to generate (ignored if `--dataset` is provided).
+        #[arg(long, default_value_t = 10000usize)]
+        vectors: usize,
+        /// Dimension of synthetic vectors (ignored if `--dataset` is provided).
+        #[arg(long, default_value_t = 128usize)]
+        dim: usize,
+        /// Number of random queries to evaluate.
+        #[arg(long, default_value_t = 100usize)]
+        queries: usize,
+        /// k for recall@k metric.
+        #[arg(long, default_value_t = 10usize)]
+        k: usize,
+        /// Save a timestamped JSON results file to `benchmarks/results/`.
+        #[arg(long, default_value_t = false)]
+        save_report: bool,
+        /// Suppress per-query output; only print the final summary table.
+        #[arg(long, default_value_t = false)]
+        quiet: bool,
+    },
 }
 
 /// Sub-commands for the `vectro index` family.
@@ -400,6 +432,177 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Commands::BenchGt { dataset, vectors, dim, queries, k, save_report, quiet } => {
+            execute_bench_gt(dataset.as_deref(), vectors, dim, queries, k, save_report, quiet)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Ground-truth recall & QPS evaluation for brute-force, HNSW, and PQ search.
+fn execute_bench_gt(
+    dataset_path: Option<&str>,
+    n_vectors: usize,
+    dim: usize,
+    n_queries: usize,
+    k: usize,
+    save_report: bool,
+    quiet: bool,
+) -> anyhow::Result<()> {
+    use vectro_lib::{Embedding, HnswIndex, ProductQuantizer, search::SearchIndex, recall_at_k};
+    use std::time::Instant;
+
+    // ── 1. Load or generate dataset ─────────────────────────────────────────
+    let embeddings: Vec<Embedding> = if let Some(path) = dataset_path {
+        if !quiet { println!("Loading dataset from {}…", path); }
+        vectro_lib::EmbeddingDataset::load(path)?.embeddings
+    } else {
+        if !quiet { println!("Generating {} × {}-d synthetic vectors…", n_vectors, dim); }
+        // Deterministic xorshift64 — same seed guarantees reproducible CI runs.
+        let mut state: u64 = 0xdeadbeef_cafebabe;
+        let mut next = move || -> f32 {
+            state ^= state << 13; state ^= state >> 7; state ^= state << 17;
+            (state >> 11) as f32 / (1u64 << 53) as f32 * 2.0 - 1.0
+        };
+        (0..n_vectors)
+            .map(|i| Embedding::new(format!("v{}", i), (0..dim).map(|_| next()).collect()))
+            .collect()
+    };
+
+    let n = embeddings.len();
+    let d = embeddings.first().map(|e| e.vector.len()).unwrap_or(0);
+    if n == 0 || d == 0 {
+        anyhow::bail!("Dataset is empty or has zero-dimensional vectors.");
+    }
+    let effective_queries = n_queries.min(n);
+    let effective_k = k.min(n);
+
+    if !quiet {
+        println!("Dataset: {} vectors × {} dimensions", n, d);
+        println!("Queries: {}  k: {}", effective_queries, effective_k);
+        println!();
+    }
+
+    // Pick query vectors: evenly spaced indices into the corpus.
+    let queries: Vec<&[f32]> = (0..effective_queries)
+        .map(|i| embeddings[i * n / effective_queries].vector.as_slice())
+        .collect();
+
+    // ── 2. Brute-force (exact) ground truth ─────────────────────────────────
+    if !quiet { println!("Running brute-force (exact) search…"); }
+    let brute_idx = SearchIndex::from_dataset(&embeddings);
+
+    let bf_start = Instant::now();
+    let exact_results: Vec<Vec<String>> = queries
+        .iter()
+        .map(|q| brute_idx.top_k(q, effective_k).into_iter().map(|(id, _)| id.to_string()).collect())
+        .collect();
+    let bf_elapsed = bf_start.elapsed().as_secs_f64();
+    let bf_qps = effective_queries as f64 / bf_elapsed;
+    let bf_lat_ms = bf_elapsed / effective_queries as f64 * 1000.0;
+
+    // ── 3. HNSW approximate search ───────────────────────────────────────────
+    if !quiet { println!("Building HNSW index (M=16, ef_construction=200, ef_search=50)…"); }
+    let hnsw_build_start = Instant::now();
+    let hnsw = HnswIndex::build(&embeddings, 16, 200, 50);
+    let hnsw_build_ms = hnsw_build_start.elapsed().as_secs_f64() * 1000.0;
+
+    let hnsw_start = Instant::now();
+    let hnsw_results: Vec<Vec<String>> = queries
+        .iter()
+        .map(|q| hnsw.search(q, effective_k).into_iter().map(|(id, _)| id).collect())
+        .collect();
+    let hnsw_elapsed = hnsw_start.elapsed().as_secs_f64();
+    let hnsw_qps = effective_queries as f64 / hnsw_elapsed;
+    let hnsw_lat_ms = hnsw_elapsed / effective_queries as f64 * 1000.0;
+    let hnsw_recall: f64 = exact_results.iter().zip(hnsw_results.iter())
+        .map(|(ex, ap)| recall_at_k(ex, ap, effective_k))
+        .sum::<f64>() / effective_queries as f64;
+
+    // ── 4. PQ approximate search ─────────────────────────────────────────────
+    // m=8 subspaces; fall back to 1 if dimension is not divisible.
+    let pq_m = if d % 8 == 0 { 8 } else { 1 };
+    let pq_k_centroids = 256usize.min(n);
+    if !quiet { println!("Training PQ ({} subspaces, {} centroids per subspace)…", pq_m, pq_k_centroids); }
+    let pq_build_start = Instant::now();
+    let pq = ProductQuantizer::train(&embeddings, pq_m, pq_k_centroids, 25);
+    let pq_build_ms = pq_build_start.elapsed().as_secs_f64() * 1000.0;
+    let codes: Vec<(String, Vec<u8>)> = embeddings.iter()
+        .map(|e| (e.id.clone(), pq.encode(&e.vector)))
+        .collect();
+
+    let pq_start = Instant::now();
+    let pq_results: Vec<Vec<String>> = queries.iter().map(|q| {
+        pq.search_adc(&codes, q, effective_k)
+            .into_iter().map(|(id, _)| id.to_string()).collect()
+    }).collect();
+    let pq_elapsed = pq_start.elapsed().as_secs_f64();
+    let pq_qps = effective_queries as f64 / pq_elapsed;
+    let pq_lat_ms = pq_elapsed / effective_queries as f64 * 1000.0;
+    let pq_recall: f64 = exact_results.iter().zip(pq_results.iter())
+        .map(|(ex, ap)| recall_at_k(ex, ap, effective_k))
+        .sum::<f64>() / effective_queries as f64;
+
+    // ── 5. Print summary table ───────────────────────────────────────────────
+    let hnsw_gate = hnsw_recall >= 0.90;
+    let pq_gate   = pq_recall   >= 0.90;
+
+    println!();
+    println!("Ground-Truth Recall & QPS Benchmark");
+    println!("  dataset : {} × {}-d | queries: {} | k: {}", n, d, effective_queries, effective_k);
+    println!();
+    println!("{:<24} {:>10} {:>14} {:>12} {:>12}",
+        "algorithm", "recall@k", "QPS", "lat_ms", "build_ms");
+    println!("{}", "-".repeat(76));
+    println!("{:<24} {:>10} {:>14.0} {:>12.3} {:>12}",
+        "brute-force (exact)", "1.0000", bf_qps, bf_lat_ms, "—");
+    println!("{:<24} {:>10.4} {:>14.0} {:>12.3} {:>12.0}  {}",
+        "HNSW M=16 ef_s=50",
+        hnsw_recall, hnsw_qps, hnsw_lat_ms, hnsw_build_ms,
+        if hnsw_gate { "✅ ≥0.90" } else { "❌ <0.90" });
+    println!("{:<24} {:>10.4} {:>14.0} {:>12.3} {:>12.0}  {}",
+        &format!("PQ m={} k={}", pq_m, pq_k_centroids),
+        pq_recall, pq_qps, pq_lat_ms, pq_build_ms,
+        if pq_gate { "✅ ≥0.90" } else { "❌ <0.90" });
+    println!();
+
+    if !hnsw_gate {
+        eprintln!("WARNING: HNSW recall@{} = {:.4} — below 0.90 gate.", effective_k, hnsw_recall);
+    }
+    if !pq_gate {
+        eprintln!("WARNING: PQ recall@{} = {:.4} — below 0.90 gate.", effective_k, pq_recall);
+    }
+
+    // ── 6. Save JSON report ──────────────────────────────────────────────────
+    if save_report {
+        use std::fs;
+        let dir = std::path::PathBuf::from("benchmarks/results");
+        fs::create_dir_all(&dir)?;
+        let ts = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+        let filename = dir.join(format!("{}-bench-gt.json", ts));
+        let report = serde_json::json!({
+            "timestamp": chrono::Local::now().to_rfc3339(),
+            "version": env!("CARGO_PKG_VERSION"),
+            "dataset": { "source": dataset_path.unwrap_or("synthetic"), "vectors": n, "dimensions": d },
+            "queries": effective_queries,
+            "k": effective_k,
+            "brute_force": { "qps": bf_qps, "latency_ms": bf_lat_ms },
+            "hnsw": {
+                "m": 16, "ef_construction": 200, "ef_search": 50,
+                "build_ms": hnsw_build_ms,
+                "qps": hnsw_qps, "latency_ms": hnsw_lat_ms,
+                "recall_at_k": hnsw_recall, "gate_pass": hnsw_gate
+            },
+            "pq": {
+                "m_subspaces": pq_m, "k_centroids": pq_k_centroids, "iterations": 25,
+                "build_ms": pq_build_ms,
+                "qps": pq_qps, "latency_ms": pq_lat_ms,
+                "recall_at_k": pq_recall, "gate_pass": pq_gate
+            }
+        });
+        fs::write(&filename, serde_json::to_string_pretty(&report)?)?;
+        println!("📄 Report saved → {}", filename.display());
     }
 
     Ok(())

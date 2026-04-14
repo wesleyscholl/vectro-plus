@@ -12,6 +12,33 @@ All notable changes to Vectro+ will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-04-13
+
+### ✨ Added — v1.4.0: Real-World Benchmarks
+
+#### 📊 New Command: `vectro bench-gt`
+- Ground-truth recall@k and QPS evaluation for all search algorithms
+- Evaluates brute-force (exact), HNSW, and PQ over the same query set
+- Synthetic data generation: `--vectors N --dim D` with deterministic xorshift64 PRNG (seed `0xdeadbeef_cafebabe`) — fully CI-reproducible, no randomness
+- External dataset support: `--dataset <path>` (any Vectro binary format or JSONL)
+- `--save-report` writes timestamped JSON to `benchmarks/results/`
+- Soft recall gates: recall@10 ≥ 0.90 for HNSW and PQ (warns on failure, full table always printed)
+
+#### 📐 New Library Function: `vectro_lib::recall_at_k`
+- `pub fn recall_at_k(exact: &[String], approx: &[String], k: usize) -> f64`
+- Set-intersection formula: `|approx_top_k ∩ exact_top_k| / k`
+- Includes doc-test
+
+#### 📝 New Files
+- `scripts/run_benchmark.sh` — build release binary and run `bench-gt` with configurable params
+- `BENCHMARKS.md` — methodology, parameter documentation, result tables, and JSON report schema
+
+### 📋 Changed
+- `vectro_lib` version bumped to 1.4.0
+- `vectro_cli` version bumped to 1.4.0
+
+---
+
 ## [1.3.0] - 2026-04-13
 
 ### ✨ Added — v1.3.0: HNSW ANN Index
