@@ -1,0 +1,35 @@
+{
+  "brute_force": {
+    "latency_ms": 0.50369584,
+    "qps": 1985.325112075573
+  },
+  "dataset": {
+    "dimensions": 128,
+    "source": "synthetic",
+    "vectors": 10000
+  },
+  "hnsw": {
+    "build_ms": 3653.881375,
+    "ef_construction": 200,
+    "ef_search": 50,
+    "gate_pass": true,
+    "latency_ms": 0.1239725,
+    "m": 16,
+    "qps": 8066.305027324608,
+    "recall_at_k": 0.9200000000000004
+  },
+  "k": 10,
+  "pq": {
+    "build_ms": 319.75399999999996,
+    "gate_pass": false,
+    "iterations": 25,
+    "k_centroids": 256,
+    "latency_ms": 0.28935791,
+    "m_subspaces": 8,
+    "qps": 3455.927643381168,
+    "recall_at_k": 0.21799999999999997
+  },
+  "queries": 100,
+  "timestamp": "2026-04-14T07:29:40.652295-04:00",
+  "version": "2.0.0"
+}

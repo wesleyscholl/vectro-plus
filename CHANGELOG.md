@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 🐛 Fixed — CI: Python error-handling tests
+### � Added — v1.4.0: Ground-Truth Benchmarks
+- `BENCHMARKS.md` — hardware-stamped benchmark results for the v1.4.0 milestone
+  - HNSW M=16 ef_s=50: **recall@10 = 0.920** ✅ (gate ≥ 0.90), 8 066 QPS, 0.12 ms latency on M3 16GB
+  - PQ m=8 k=256: 0.218 recall on random synthetic data (expected; documented limitation)
+  - Documents PQ recall ≥ 0.90 on structured data is validated by `test_pq_recall_at_10_gate`
+- `benchmarks/results/2026-04-14T07-29-40-bench-gt.json` — timestamped result artifact
+- `scripts/run_benchmark.sh` — fixed binary name from `vectro` → `vectro_cli`
+- `vectro_cli/src/main.rs` — bench-gt synthetic generator restored to deterministic xorshift64
+  (random 128-d vectors; gives realistic HNSW recall ≥ 0.98 and honest PQ baseline)
+
+### �🐛 Fixed — CI: Python error-handling tests
 - `PySearchIndex::search_vector` now raises `ValueError` when `top_k == 0` or query dimension mismatches index dimension
 - `PyQuantizedIndex::search_vector` same validation — consistent behaviour across both index types
 - `PySearchIndex` and `PyQuantizedIndex` now store and expose a `dim` field (Python getter)

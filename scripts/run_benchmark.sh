@@ -56,7 +56,7 @@ if ! cargo build --release -p vectro_cli 2>&1; then
   echo "Build failed." >&2
   exit 2
 fi
-VECTRO="$ROOT_DIR/target/release/vectro"
+VECTRO="$ROOT_DIR/target/release/vectro_cli"
 
 # ── Step 2: Assemble bench-gt arguments ──────────────────────────────────────
 BENCH_ARGS=(bench-gt --k "$K" --queries "$QUERIES")
