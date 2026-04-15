@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [2.1.0] - 2026-04-15
+
+### Added
+- `vectro pipeline` CLI subcommand — compress → HNSW index → batch search end-to-end pipeline
+- `StreamIter` / `iter_stream()` in `vectro_lib` for lazy, zero-copy VECTRO+STREAM1 file iteration
+- `PyStreamIter` PyO3 binding exposing the streaming iterator to Python
+- `EmbeddingDataset.stream_from_file(path)` static method on the Python dataset class
+- `stream_embeddings(path)` convenience wrapper in `vectro_plus`
+- WASM entry points: `cosine_similarity()` and `quantize_batch()` in `vectro_lib/src/wasm.rs`
+- `wasm-bindgen` conditional dependency in `vectro_lib/Cargo.toml`
+- All `rayon` parallel calls gated with `#[cfg(not(target_arch = "wasm32"))]` sequential fallbacks
+- `scripts/convert_glove_to_stream1.py` — converts GloVe `.txt` file to `VECTRO+STREAM1` binary format
+- `python/tests/test_streaming.py` — integration tests for the streaming API
+- `js/test.js` — Node.js WASM smoke tests
+- `StreamIter` class stub in `python/vectro_plus/__init__.pyi`
+- `stream_embeddings` type stub in `__init__.pyi`
+
+### Changed
+- `vectro_lib/Cargo.toml`: added `[lib] crate-type = ["cdylib", "rlib"]` for `wasm-pack` compatibility
+- `vectro_lib/Cargo.toml`: rayon moved to `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`
+
 ## [2.0.1] - 2026-04-15
 
 ### 🐛 Fixed

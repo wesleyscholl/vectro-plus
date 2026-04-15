@@ -24,6 +24,7 @@ use serde_json::Value;
 type BenchRow = (String, Option<f64>, Option<f64>, Option<String>);
 
 pub mod server;
+pub mod pipeline;
 
 #[derive(Parser)]
 #[command(name = "vectro")]
@@ -129,6 +130,39 @@ enum Commands {
         save_report: bool,
         /// Suppress per-query output; only print the final summary table.
         #[arg(long, default_value_t = false)]
+        quiet: bool,
+    },
+
+    /// End-to-end pipeline: compress → HNSW index → optional JSONL batch search.
+    ///
+    /// Example: `vectro pipeline --input data.jsonl --out-dir ./run --format stream1`
+    Pipeline {
+        /// Input JSONL embeddings file.
+        #[arg(long)]
+        input: String,
+        /// Output directory; receives compressed dataset, HNSW index, and search results.
+        #[arg(long)]
+        out_dir: String,
+        /// Compression format: stream1 (lossless), pq, nf4, rq, auto.
+        #[arg(long, default_value = "stream1")]
+        format: String,
+        /// HNSW M parameter (max connections per node per layer).
+        #[arg(long, default_value_t = 16usize)]
+        m: usize,
+        /// HNSW ef_construction (beam width during index build).
+        #[arg(long, default_value_t = 200usize)]
+        ef_construction: usize,
+        /// HNSW ef_search (beam width at query time).
+        #[arg(long, default_value_t = 50usize)]
+        ef_search: usize,
+        /// Optional JSONL file of query vectors (one `{"id":…,"vector":[…]}` per line).
+        #[arg(long)]
+        query_file: Option<String>,
+        /// Number of nearest neighbours to return per query.
+        #[arg(short, long, default_value_t = 10usize)]
+        top_k: usize,
+        /// Suppress progress messages; only print errors and final results.
+        #[arg(long)]
         quiet: bool,
     },
 }
@@ -451,6 +485,10 @@ fn main() -> anyhow::Result<()> {
         },
         Commands::BenchGt { dataset, vectors, dim, queries, k, save_report, quiet } => {
             execute_bench_gt(dataset.as_deref(), vectors, dim, queries, k, save_report, quiet)?;
+        }
+        Commands::Pipeline { input, out_dir, format, m, ef_construction, ef_search, query_file, top_k, quiet } => {
+            pipeline::run_pipeline(&input, &out_dir, &format, m, ef_construction, ef_search,
+                query_file.as_deref(), top_k, quiet)?;
         }
     }
 

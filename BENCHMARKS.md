@@ -72,6 +72,29 @@ that model the cluster structure present in real embedding datasets (SIFT1M, Glo
 
 ---
 
+## v2.1.0 — GloVe-100d (1.2M × 100-d, M3 16GB)
+
+> **Status:** Framework complete (v2.1.0). Full run pending GloVe download.  
+> **Gate criterion:** δ recall@10 < 5 pp vs vectro Python reference; HNSW recall@10 ≥ 0.90.
+
+### How to run
+
+```bash
+# 1. Download GloVe 6B 100d text file (840 MB, Stanford NLP)
+#    https://nlp.stanford.edu/data/glove.6B.zip  — extract glove.6B.100d.txt
+
+# 2. Convert to STREAM1 binary format
+python scripts/convert_glove_to_stream1.py glove.6B.100d.txt glove100d.stream1
+
+# 3. Run benchmark and compare against vectro Python reference
+./scripts/run_benchmark.sh --dataset glove100d.stream1 --save-report --ground-truth
+```
+
+Report will be saved to `benchmarks/results/<timestamp>-bench-gt.json`.  
+Update this section with the resulting recall@10, QPS, and δ vs reference when the run completes.
+
+---
+
 ## What Each Column Means
 
 | Column | Meaning |

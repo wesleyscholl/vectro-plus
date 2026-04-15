@@ -171,6 +171,64 @@ python setup.py build_ext --inplace
 python build_python_bindings.py
 ```
 
+## 🔁 Streaming API (v2.1.0)
+
+Lazy, zero-copy iteration over large VECTRO+STREAM1 files — processes datasets that exceed RAM:
+
+```python
+import vectro_plus as vp
+
+# Iterate without loading the full file into memory
+for embedding in vp.stream_embeddings("embeddings.stream1"):
+    print(embedding.id, embedding.vector[:4])
+
+# Or via the dataset class
+for emb in vp.EmbeddingDataset.stream_from_file("embeddings.stream1"):
+    process(emb)
+```
+
+In Rust (`vectro_lib`):
+```rust
+use vectro_lib::iter_stream;
+for embedding in iter_stream("embeddings.stream1")? {
+    let emb = embedding?;
+    println!("{}: {:?}", emb.id, &emb.vector[..4]);
+}
+```
+
+## 🚀 Pipeline CLI (v2.1.0)
+
+End-to-end compress → index → search pipeline in a single command:
+
+```bash
+# Full pipeline: convert JSONL → compress → build HNSW → batch query
+./target/release/vectro_cli pipeline \
+  --input embeddings.jsonl \
+  --out-dir ./pipeline_output \
+  --format stream1 \
+  --query-file queries.jsonl \
+  --top-k 10
+
+# Help
+./target/release/vectro_cli pipeline --help
+```
+
+The pipeline writes `output.stream1` (or `.qstream1`), builds an HNSW index, and if `--query-file` is provided runs batch search and prints results.
+
+## 🌐 WASM (v2.1.0)
+
+`vectro_lib` compiles to WebAssembly for in-browser or edge use:
+
+```bash
+# Build WASM module (requires wasm-pack)
+wasm-pack build vectro_lib --target web
+
+# Smoke test in Node.js
+node js/test.js
+```
+
+Exported WASM functions: `cosine_similarity(a: Float32Array, b: Float32Array) -> f32` and `quantize_batch(data: Float32Array, dim: usize) -> Uint8Array`.
+
 **Features:**
 - Zero-copy NumPy array integration
 - Comprehensive quality analysis tools

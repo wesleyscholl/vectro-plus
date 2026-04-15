@@ -20,7 +20,7 @@
 
 ---
 
-## 🚧 v2.1.0 — Real-World Benchmarks + Pipeline CLI + Streaming API
+## ✅ v2.1.0 — Real-World Benchmarks + Pipeline CLI + Streaming API
 
 **Theme:** Close all open gates from v2.0.0. Make vectro-plus demo-able end-to-end for a
 pipeline that a hiring manager at Groq or Together AI would recognize as a real RAG component.

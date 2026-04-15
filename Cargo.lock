@@ -2287,6 +2287,7 @@ dependencies = [
  "rayon",
  "serde",
  "tempfile",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -105,6 +105,13 @@ impl PyEmbeddingDataset {
     fn __repr__(&self) -> String {
         format!("PyEmbeddingDataset(size={})", self.inner.len())
     }
+
+    #[staticmethod]
+    fn stream_from_file(path: &str) -> PyResult<PyStreamIter> {
+        vectro_lib::iter_stream(path)
+            .map(|it| PyStreamIter { inner: it })
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    }
 }
 
 /// Python wrapper for SearchIndex
@@ -410,6 +417,26 @@ fn benchmark_search_performance(
     Ok(benchmark)
 }
 
+/// Python wrapper for vectro_lib::StreamIter — lazy STREAM1 file iterator.
+#[pyclass]
+struct PyStreamIter {
+    inner: vectro_lib::StreamIter,
+}
+
+#[pymethods]
+impl PyStreamIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> PyResult<Option<PyEmbedding>> {
+        match slf.inner.next() {
+            Some(Ok(e)) => Ok(Some(PyEmbedding { inner: e })),
+            Some(Err(e)) => Err(pyo3::exceptions::PyIOError::new_err(e.to_string())),
+            None => Ok(None),
+        }
+    }
+}
+
 /// Main Python module
 #[pymodule]
 fn vectro_py(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
@@ -417,6 +444,7 @@ fn vectro_py(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyEmbeddingDataset>()?;
     m.add_class::<PySearchIndex>()?;
     m.add_class::<PyQuantizedIndex>()?;
+    m.add_class::<PyStreamIter>()?;
     m.add_function(wrap_pyfunction!(compress_embeddings, m)?)?;
     m.add_function(wrap_pyfunction!(analyze_compression_quality, m)?)?;
     m.add_function(wrap_pyfunction!(benchmark_search_performance, m)?)?;

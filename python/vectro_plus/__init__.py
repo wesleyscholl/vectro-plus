@@ -28,7 +28,7 @@ Example:
     >>> print(f"Average similarity: {quality['average_similarity']:.4f}")
 """
 
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import Iterator, List, Dict, Any, Optional, Tuple, Union
 import numpy as np
 
 # Import the Rust extension
@@ -38,6 +38,7 @@ try:
         PyEmbeddingDataset as EmbeddingDataset,
         PySearchIndex as SearchIndex,
         PyQuantizedIndex as QuantizedIndex,
+        PyStreamIter as StreamIter,
         compress_embeddings,
         analyze_compression_quality,
         benchmark_search_performance,
@@ -45,6 +46,10 @@ try:
         __author__,
         __description__,
     )
+
+    def stream_embeddings(path: str) -> Iterator["Embedding"]:
+        """Lazy iterator over Embeddings in a STREAM1 file."""
+        return EmbeddingDataset.stream_from_file(path)
     _rust_available = True
 except ImportError as e:
     print(f"Warning: Rust extension not available: {e}")
@@ -86,6 +91,14 @@ except ImportError as e:
     def benchmark_search_performance(index, queries: "np.ndarray", top_k: int = 10):  # type: ignore[no-redef]
         raise RuntimeError("Rust extension required for benchmark_search_performance")
 
+    class StreamIter:  # type: ignore[no-redef]
+        """Fallback stub — Rust extension not available."""
+        def __iter__(self): return self
+        def __next__(self): raise StopIteration
+
+    def stream_embeddings(path: str):  # type: ignore[no-redef]
+        raise RuntimeError("Rust extension required for stream_embeddings")
+
 # Re-export main classes and functions
 __all__ = [
     # Core classes
@@ -93,6 +106,9 @@ __all__ = [
     "EmbeddingDataset", 
     "SearchIndex",
     "QuantizedIndex",
+    "StreamIter",
+    # Streaming
+    "stream_embeddings",
     # Main functions
     "compress_embeddings",
     "create_index",

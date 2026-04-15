@@ -8,7 +8,7 @@ Any change to method signatures in vectro_py/src/lib.rs or __init__.py
 MUST be reflected here in the same commit (per project rules).
 """
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -38,6 +38,14 @@ class EmbeddingDataset:
     def get_ids(self) -> List[str]: ...
     def __len__(self) -> int: ...
     def __repr__(self) -> str: ...
+    @staticmethod
+    def stream_from_file(path: str) -> "StreamIter": ...
+
+class StreamIter:
+    """Lazy iterator over Embedding objects in a VECTRO+STREAM1 file."""
+
+    def __iter__(self) -> "StreamIter": ...
+    def __next__(self) -> Embedding: ...
 
 class SearchIndex:
     """Exact brute-force cosine-similarity search index."""
@@ -213,6 +221,10 @@ def info() -> Dict[str, str]:
 
 def version() -> str:
     """Return the package version string."""
+    ...
+
+def stream_embeddings(path: str) -> Iterator[Embedding]:
+    """Lazy iterator over Embeddings in a VECTRO+STREAM1 file."""
     ...
 
 # ── Package metadata ──────────────────────────────────────────────────────────

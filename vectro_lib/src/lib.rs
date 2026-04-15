@@ -17,6 +17,9 @@ pub use rq::ResidualQuantizer;
 pub mod auto_quantize;
 pub use auto_quantize::{auto_select_format, AutoQuantizeResult, QuantFormat};
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
 /// Compute recall@k between an exact (ground-truth) result set and an approximate result set.
 ///
 /// Both slices should contain the top-k IDs in descending similarity order. Only the first
@@ -283,9 +286,51 @@ impl EmbeddingDataset {
     }
 }
 
+// ── Streaming iterator over STREAM1 files ─────────────────────────────────
+
+/// Lazy iterator that yields one [`Embedding`] at a time from a STREAM1 file.
+/// Avoids loading the entire dataset into memory.
+pub struct StreamIter {
+    reader: std::io::BufReader<std::fs::File>,
+}
+
+impl Iterator for StreamIter {
+    type Item = anyhow::Result<Embedding>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use std::io::Read;
+        let mut len_buf = [0u8; 4];
+        match self.reader.read_exact(&mut len_buf) {
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return None,
+            Err(e) => return Some(Err(anyhow::anyhow!("stream read: {}", e))),
+            Ok(()) => {}
+        }
+        let len = u32::from_le_bytes(len_buf) as usize;
+        let mut payload = vec![0u8; len];
+        if let Err(e) = self.reader.read_exact(&mut payload) {
+            return Some(Err(anyhow::anyhow!("stream record: {}", e)));
+        }
+        Some(bincode::deserialize(&payload).map_err(|e| anyhow::anyhow!("deserialize: {}", e)))
+    }
+}
+
+/// Open a STREAM1 file and return a lazy [`StreamIter`].
+///
+/// Reads and validates the 15-byte magic header, then yields one
+/// [`Embedding`] per call to `next()` without buffering the entire file.
+pub fn iter_stream(path: &str) -> anyhow::Result<StreamIter> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut hdr = [0u8; 15];
+    f.read_exact(&mut hdr)?;
+    anyhow::ensure!(&hdr == b"VECTRO+STREAM1\n", "not a STREAM1 file: {}", path);
+    Ok(StreamIter { reader: std::io::BufReader::new(f) })
+}
+
 /// Search utilities
 pub mod search {
     use crate::Embedding;
+    #[cfg(not(target_arch = "wasm32"))]
     use rayon::prelude::*;
     
 
@@ -318,13 +363,22 @@ pub mod search {
         query: &[f32],
         k: usize,
     ) -> Vec<(&'a str, f32)> {
+        #[cfg(not(target_arch = "wasm32"))]
         let mut scores: Vec<(&str, f32)> = dataset
             .par_iter()
             .map(|e| (e.id.as_str(), cosine(&e.vector, query)))
             .collect();
+        #[cfg(target_arch = "wasm32")]
+        let mut scores: Vec<(&str, f32)> = dataset
+            .iter()
+            .map(|e| (e.id.as_str(), cosine(&e.vector, query)))
+            .collect();
 
         // sort descending by score
+        #[cfg(not(target_arch = "wasm32"))]
         scores.par_sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        #[cfg(target_arch = "wasm32")]
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         scores.into_iter().take(k).collect()
     }
@@ -372,24 +426,41 @@ pub mod search {
             }
             let q: Vec<f32> = query.iter().map(|v| v / qnorm).collect();
 
+            #[cfg(not(target_arch = "wasm32"))]
             let mut scores: Vec<(&str, f32)> = self
                 .normalized
                 .par_iter()
                 .zip(self.ids.par_iter())
                 .map(|(vec, id)| (id.as_str(), dot(vec, &q)))
                 .collect();
+            #[cfg(target_arch = "wasm32")]
+            let mut scores: Vec<(&str, f32)> = self
+                .normalized
+                .iter()
+                .zip(self.ids.iter())
+                .map(|(vec, id)| (id.as_str(), dot(vec, &q)))
+                .collect();
 
+            #[cfg(not(target_arch = "wasm32"))]
             scores.par_sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            #[cfg(target_arch = "wasm32")]
+            scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             scores.into_iter().take(k).collect()
         }
 
         /// Batch top-k: accept multiple queries and return a Vec per query.
         pub fn batch_top_k(&self, queries: &[Vec<f32>], k: usize) -> Vec<Vec<(&str, f32)>> {
             // Parallelize across queries
-            queries
+            #[cfg(not(target_arch = "wasm32"))]
+            return queries
                 .par_iter()
                 .map(|q| self.top_k(q, k))
-                .collect()
+                .collect();
+            #[cfg(target_arch = "wasm32")]
+            return queries
+                .iter()
+                .map(|q| self.top_k(q, k))
+                .collect();
         }
     }
 
@@ -482,25 +553,43 @@ pub mod search {
             if qnorm == 0.0 { return vec![]; }
             let qnormed: Vec<f32> = query.iter().map(|v| v / qnorm).collect();
 
+            #[cfg(not(target_arch = "wasm32"))]
             let mut scores: Vec<(&str, f32)> = match &self.normalized_cache {
                 Some(cache) => cache.par_iter().zip(self.ids.par_iter()).map(|(v, id)| {
                     (id.as_str(), dot(v, &qnormed))
                 }).collect(),
                 None => self.qvecs.par_iter().zip(self.ids.par_iter()).map(|(qv, id)| {
                     let v = self.dequantize_vec(qv);
-                    // normalize dequantized vector
+                    let n = norm(&v);
+                    let score = if n == 0.0 { -1.0 } else { dot(&v, &qnormed) / n };
+                    (id.as_str(), score)
+                }).collect(),
+            };
+            #[cfg(target_arch = "wasm32")]
+            let mut scores: Vec<(&str, f32)> = match &self.normalized_cache {
+                Some(cache) => cache.iter().zip(self.ids.iter()).map(|(v, id)| {
+                    (id.as_str(), dot(v, &qnormed))
+                }).collect(),
+                None => self.qvecs.iter().zip(self.ids.iter()).map(|(qv, id)| {
+                    let v = self.dequantize_vec(qv);
                     let n = norm(&v);
                     let score = if n == 0.0 { -1.0 } else { dot(&v, &qnormed) / n };
                     (id.as_str(), score)
                 }).collect(),
             };
 
+            #[cfg(not(target_arch = "wasm32"))]
             scores.par_sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            #[cfg(target_arch = "wasm32")]
+            scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             scores.into_iter().take(k).collect()
         }
 
         pub fn batch_top_k(&self, queries: &[Vec<f32>], k: usize) -> Vec<Vec<(&str, f32)>> {
-            queries.par_iter().map(|q| self.top_k(q, k)).collect()
+            #[cfg(not(target_arch = "wasm32"))]
+            return queries.par_iter().map(|q| self.top_k(q, k)).collect();
+            #[cfg(target_arch = "wasm32")]
+            return queries.iter().map(|q| self.top_k(q, k)).collect();
         }
 
         /// Precompute and cache normalized dequantized vectors to accelerate scoring.
