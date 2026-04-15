@@ -6,7 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.0.1] - 2026-04-15
 
+### 🐛 Fixed
+- `python/vectro_plus/__init__.py` — `except ImportError` fallback path now defines stub classes (`Embedding`, `EmbeddingDataset`, `SearchIndex`, `QuantizedIndex`) and stub functions (`compress_embeddings`, `analyze_compression_quality`, `benchmark_search_performance`) so that type annotations and pytest collection do not crash with `NameError` when the Rust extension is unavailable (e.g. CI before `maturin develop` runs)
 ### � Added — v1.4.0: Ground-Truth Benchmarks
 - `BENCHMARKS.md` — hardware-stamped benchmark results for the v1.4.0 milestone
   - HNSW M=16 ef_s=50: **recall@10 = 0.920** ✅ (gate ≥ 0.90), 8 066 QPS, 0.12 ms latency on M3 16GB

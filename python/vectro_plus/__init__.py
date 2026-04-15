@@ -54,6 +54,38 @@ except ImportError as e:
     __author__ = "Wesley Scholl"
     __description__ = "Python bindings for Vectro+ (fallback mode)"
 
+    # Stub types so that type annotations and isinstance checks work without
+    # the compiled Rust extension (e.g. during CI collect or import-time tests).
+    class Embedding:  # type: ignore[no-redef]
+        """Fallback stub — Rust extension not available."""
+        def __init__(self, id: str, vector: list) -> None:
+            self.id = id
+            self.vector = vector
+
+    class EmbeddingDataset:  # type: ignore[no-redef]
+        """Fallback stub — Rust extension not available."""
+        def __init__(self) -> None:
+            self.embeddings: list = []
+
+    class SearchIndex:  # type: ignore[no-redef]
+        """Fallback stub — Rust extension not available."""
+        def search_vector(self, query: "np.ndarray", top_k: int = 10):
+            raise RuntimeError("Rust extension required for search")
+
+    class QuantizedIndex:  # type: ignore[no-redef]
+        """Fallback stub — Rust extension not available."""
+        def search_vector(self, query: "np.ndarray", top_k: int = 10):
+            raise RuntimeError("Rust extension required for quantized search")
+
+    def compress_embeddings(vectors: "np.ndarray", ids=None):  # type: ignore[no-redef]
+        raise RuntimeError("Rust extension required for compress_embeddings")
+
+    def analyze_compression_quality(vectors: "np.ndarray", index):  # type: ignore[no-redef]
+        raise RuntimeError("Rust extension required for analyze_compression_quality")
+
+    def benchmark_search_performance(index, queries: "np.ndarray", top_k: int = 10):  # type: ignore[no-redef]
+        raise RuntimeError("Rust extension required for benchmark_search_performance")
+
 # Re-export main classes and functions
 __all__ = [
     # Core classes
